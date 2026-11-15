@@ -1,0 +1,18 @@
+ARREGLO DEL PROYECTO gps-uruguay-navigator (Expo)
+
+1. Copia estos archivos sobre tu proyecto, reemplazando los existentes:
+   - app.json
+   - src/app/index.tsx
+   - src/app/_layout.tsx
+   - src/data/radares.json   (carpeta nueva)
+
+2. En la carpeta del proyecto, instala lo que faltaba:
+   npx expo install react-native-webview expo-linking expo-constants
+
+3. Prueba:
+   npx expo start -c
+   (abre con Expo Go en el telefono; los errores salen en la terminal)
+
+Cambios: se quitaron del index.tsx las lineas "cat << 'EOF'" y "EOF"; se agrego android.package;
+se reemplazaron los 14 radares escritos a mano por los 121 oficiales del MTOP; el mapa usa
+teselas CARTO (las de OpenStreetMap pueden salir en blanco desde un WebView).
