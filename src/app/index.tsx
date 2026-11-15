@@ -85,9 +85,26 @@ const getDistanceFromLatLonInMeters = (lat1, lon1, lat2, lon2) => {
   return R * c;
 };
 
+const translateManeuver = (step) => {
+  if (!step || !step.maneuver) return { text: 'Continúe por la ruta', arrow: '↑' };
+  const { type, modifier } = step.maneuver;
+  const street = step.name ? ` hacia ${step.name}` : '';
+
+  if (type === 'arrive') return { text: 'Ha llegado a su destino', arrow: '🏁' };
+  if (type === 'roundabout' || type === 'rotary') return { text: `Entre a la rotonda${street}`, arrow: '🔄' };
+  if (modifier === 'left' || modifier === 'sharp left') return { text: `Gire a la izquierda${street}`, arrow: '↰' };
+  if (modifier === 'slight left') return { text: `Manténgase a la izquierda${street}`, arrow: '↖' };
+  if (modifier === 'right' || modifier === 'sharp right') return { text: `Gire a la derecha${street}`, arrow: '↱' };
+  if (modifier === 'slight right') return { text: `Manténgase a la derecha${street}`, arrow: '↗' };
+  if (modifier === 'uturn') return { text: `Dé vuelta en U${street}`, arrow: '↩' };
+  return { text: `Continúe recto${street}`, arrow: '↑' };
+};
+
 function MainNavigatorApp() {
   const mapRef = useRef(null);
   const inputRef = useRef(null);
+  const lastSpokenStepRef = useRef('');
+
   const [isDarkMode, setIsDarkMode] = useState(false);
   const [favorites, setFavorites] = useState([]);
   const [searchQuery, setSearchQuery] = useState('');
@@ -102,6 +119,9 @@ function MainNavigatorApp() {
   const [navState, setNavState] = useState('IDLE');
   const [destination, setDestination] = useState(null);
   const [routeCoordinates, setRouteCoordinates] = useState([]);
+  const [routeSteps, setRouteSteps] = useState([]);
+  const [routeSummary, setRouteSummary] = useState({ distanceKm: 0, durationMin: 0 });
+  const [nextInstruction, setNextInstruction] = useState({ text: 'Continúe por la ruta', arrow: '↑', distMeters: 0 });
   
   const [modalVisible, setModalVisible] = useState(false);
   const [newFavName, setNewFavName] = useState('');
@@ -112,6 +132,19 @@ function MainNavigatorApp() {
     latitudeDelta: 0.005,
     longitudeDelta: 0.005,
   });
+
+  // Auto-zoom automático siempre que entramos a PREVIEW y tenemos coordenadas de ruta
+  useEffect(() => {
+    if (navState === 'PREVIEW' && routeCoordinates.length >= 2 && mapRef.current) {
+      const timer = setTimeout(() => {
+        mapRef.current?.fitToCoordinates(routeCoordinates, {
+          edgePadding: { top: 230, right: 65, bottom: 180, left: 65 },
+          animated: true,
+        });
+      }, 250);
+      return () => clearTimeout(timer);
+    }
+  }, [navState, routeCoordinates]);
 
   useEffect(() => {
     let subscriber = null;
@@ -134,14 +167,11 @@ function MainNavigatorApp() {
           async (loc) => {
             const { latitude, longitude, heading, speed } = loc.coords;
             
-            if (navState !== 'NAVIGATING' && navState !== 'PREVIEW') {
-              setLocation({
-                latitude,
-                longitude,
-                latitudeDelta: 0.005,
-                longitudeDelta: 0.005,
-              });
-            }
+            setLocation((prev) => ({
+              ...prev,
+              latitude,
+              longitude,
+            }));
 
             if (heading !== null && heading !== undefined) {
               setUserHeading(heading);
@@ -156,23 +186,23 @@ function MainNavigatorApp() {
               const reverse = await Location.reverseGeocodeAsync({ latitude, longitude });
               if (reverse && reverse.length > 0) {
                 const streetName = reverse[0].street || reverse[0].name;
-                if (streetName) {
-                  setCurrentStreet(streetName);
-                }
+                if (streetName) setCurrentStreet(streetName);
               }
             } catch (e) {}
 
             if (navState === 'NAVIGATING' && destination) {
               const distToDest = getDistanceFromLatLonInMeters(latitude, longitude, destination.latitude, destination.longitude);
               
-              if (distToDest < 20) {
+              if (distToDest < 25) {
                 speakMessage("Ha llegado a su destino. Finalizando recorrido.");
                 setNavState('IDLE');
                 setDestination(null);
                 setRouteCoordinates([]);
+                setRouteSteps([]);
                 return;
               }
 
+              updateTurnByTurnProgress(latitude, longitude);
               checkOffRoute(latitude, longitude);
             }
           }
@@ -187,7 +217,7 @@ function MainNavigatorApp() {
     return () => {
       if (subscriber) subscriber.remove();
     };
-  }, [navState, destination, routeCoordinates]);
+  }, [navState, destination, routeCoordinates, routeSteps]);
 
   useEffect(() => {
     const updateThemeBySun = () => {
@@ -226,6 +256,94 @@ function MainNavigatorApp() {
     } catch (e) {}
   };
 
+  // Consulta ruta real por calles y avenidas mediante OSRM
+  const fetchRealStreetRoute = async (startLat, startLng, endLat, endLng) => {
+    try {
+      const url = `https://router.project-osrm.org/route/v1/driving/${startLng},${startLat};${endLng},${endLat}?overview=full&geometries=geojson&steps=true`;
+      const response = await fetch(url);
+      const data = await response.json();
+
+      if (data.code === 'Ok' && data.routes && data.routes.length > 0) {
+        const route = data.routes[0];
+        const coords = route.geometry.coordinates.map(([lng, lat]) => ({
+          latitude: lat,
+          longitude: lng,
+        }));
+
+        const steps = (route.legs && route.legs[0] && route.legs[0].steps) ? route.legs[0].steps : [];
+        const distanceKm = (route.distance / 1000).toFixed(1);
+        const durationMin = Math.max(1, Math.round(route.duration / 60));
+
+        setRouteCoordinates(coords);
+        setRouteSteps(steps);
+        setRouteSummary({ distanceKm, durationMin });
+
+        if (steps.length > 0) {
+          const firstStep = steps.length > 1 ? steps[1] : steps[0];
+          const translated = translateManeuver(firstStep);
+          setNextInstruction({
+            text: translated.text,
+            arrow: translated.arrow,
+            distMeters: Math.round(steps[0].distance || 0),
+          });
+        }
+        return true;
+      }
+    } catch (e) {
+      console.error("Error obteniendo ruta OSRM:", e);
+    }
+
+    // Respaldo en caso de fallo de red
+    setRouteCoordinates([
+      { latitude: startLat, longitude: startLng },
+      { latitude: endLat, longitude: endLng },
+    ]);
+    setRouteSteps([]);
+    setRouteSummary({
+      distanceKm: (getDistanceFromLatLonInMeters(startLat, startLng, endLat, endLng) / 1000).toFixed(1),
+      durationMin: 10,
+    });
+    return false;
+  };
+
+  const updateTurnByTurnProgress = (userLat, userLng) => {
+    if (!routeSteps || routeSteps.length === 0) return;
+
+    let closestStepIndex = 0;
+    let minDist = 999999;
+
+    routeSteps.forEach((step, idx) => {
+      if (step.maneuver && step.maneuver.location) {
+        const [sLng, sLat] = step.maneuver.location;
+        const d = getDistanceFromLatLonInMeters(userLat, userLng, sLat, sLng);
+        if (d < minDist) {
+          minDist = d;
+          closestStepIndex = idx;
+        }
+      }
+    });
+
+    const upcomingIndex = Math.min(closestStepIndex + 1, routeSteps.length - 1);
+    const upcomingStep = routeSteps[upcomingIndex];
+    if (upcomingStep && upcomingStep.maneuver && upcomingStep.maneuver.location) {
+      const [uLng, uLat] = upcomingStep.maneuver.location;
+      const distToTurn = Math.round(getDistanceFromLatLonInMeters(userLat, userLng, uLat, uLng));
+      const translated = translateManeuver(upcomingStep);
+
+      setNextInstruction({
+        text: translated.text,
+        arrow: translated.arrow,
+        distMeters: distToTurn,
+      });
+
+      const stepKey = `${upcomingIndex}-${translated.text}`;
+      if (distToTurn <= 120 && lastSpokenStepRef.current !== stepKey) {
+        lastSpokenStepRef.current = stepKey;
+        speakMessage(`En ${distToTurn} metros, ${translated.text}`);
+      }
+    }
+  };
+
   const checkRadarsProximity = (userLat, userLng, userHeading, speedKmh) => {
     let alertFound = null;
     radaresData.features.forEach((radar) => {
@@ -259,30 +377,20 @@ function MainNavigatorApp() {
     }
   };
 
-  const checkOffRoute = (userLat, userLng) => {
+  const checkOffRoute = async (userLat, userLng) => {
+    if (routeCoordinates.length === 0) return;
     let minDistance = 999999;
     routeCoordinates.forEach(coord => {
       const d = getDistanceFromLatLonInMeters(userLat, userLng, coord.latitude, coord.longitude);
       if (d < minDistance) minDistance = d;
     });
 
-    if (minDistance > 50) {
+    if (minDistance > 60) {
       setNavState('REROUTING');
-      speakMessage("Recalculando ruta...");
-      setTimeout(() => {
-        const newRoute = [
-          { latitude: userLat, longitude: userLng },
-          { latitude: destination.latitude, longitude: destination.longitude }
-        ];
-        setRouteCoordinates(newRoute);
-        setNavState('NAVIGATING');
-        if (mapRef.current) {
-          mapRef.current.fitToCoordinates(newRoute, {
-            edgePadding: { top: 100, right: 80, bottom: 250, left: 80 },
-            animated: true,
-          });
-        }
-      }, 2000);
+      speakMessage("Desvío detectado. Recalculando ruta...");
+      await fetchRealStreetRoute(userLat, userLng, destination.latitude, destination.longitude);
+      lastSpokenStepRef.current = '';
+      setNavState('NAVIGATING');
     }
   };
 
@@ -291,8 +399,9 @@ function MainNavigatorApp() {
     if (!query.trim()) return;
     Keyboard.dismiss();
     try {
-      speakMessage("Buscando dirección...");
-      const geocoded = await Location.geocodeAsync(query + ", Montevideo, Uruguay");
+      speakMessage("Calculando ruta...");
+      const searchText = query.toLowerCase().includes('uruguay') ? query : `${query}, Uruguay`;
+      const geocoded = await Location.geocodeAsync(searchText);
       
       if (geocoded && geocoded.length > 0) {
         const { latitude, longitude } = geocoded[0];
@@ -302,24 +411,9 @@ function MainNavigatorApp() {
           longitude,
         };
         setDestination(dest);
-
-        const newRoute = [
-          { latitude: location.latitude, longitude: location.longitude },
-          { latitude, longitude }
-        ];
-        setRouteCoordinates(newRoute);
+        await fetchRealStreetRoute(location.latitude, location.longitude, latitude, longitude);
         setNavState('PREVIEW');
-        speakMessage(`Destino encontrado: ${query}`);
-
-        setTimeout(() => {
-          if (mapRef.current) {
-            mapRef.current.fitToCoordinates(newRoute, {
-              edgePadding: { top: 120, right: 80, bottom: 260, left: 80 },
-              animated: true,
-            });
-          }
-        }, 300);
-
+        speakMessage(`Ruta lista hacia ${query}`);
       } else {
         speakMessage("No se encontró la dirección ingresada.");
       }
@@ -329,8 +423,9 @@ function MainNavigatorApp() {
   };
 
   const handleStartNavigation = () => {
+    lastSpokenStepRef.current = '';
     setNavState('NAVIGATING');
-    speakMessage(`Iniciando recorrido hacia ${destination.name}. Conduzca con precaución.`);
+    speakMessage(`Iniciando recorrido hacia ${destination.name}. ${nextInstruction.text}`);
   };
 
   const handleVoiceDictation = () => {
@@ -351,10 +446,10 @@ function MainNavigatorApp() {
   };
 
   const distToDest = destination ? getDistanceFromLatLonInMeters(location.latitude, location.longitude, destination.latitude, destination.longitude) : 99999;
-  const isApproaching = distToDest < 50;
+  const isApproaching = distToDest < 60;
   const activePitch = (navState === 'NAVIGATING' && is3DMode && !isApproaching) ? 60 : 0;
-  const activeZoom = (navState === 'NAVIGATING' && is3DMode && !isApproaching) ? 17 : (isApproaching ? 15 : 13);
-  const activeAltitude = (navState === 'NAVIGATING' && is3DMode && !isApproaching) ? 1000 : 3000;
+  const activeZoom = (navState === 'NAVIGATING' && is3DMode && !isApproaching) ? 17 : (isApproaching ? 16 : 14);
+  const activeAltitude = (navState === 'NAVIGATING' && is3DMode && !isApproaching) ? 1000 : 2500;
 
   return (
     <View style={[styles.container, { backgroundColor: isDarkMode ? '#000000' : '#F6F6F6' }]}>
@@ -370,7 +465,7 @@ function MainNavigatorApp() {
         showsCompass={true}
         pitchEnabled={true}
         rotateEnabled={true}
-        camera={navState === 'NAVIGATING' || navState === 'PREVIEW' ? {
+        camera={navState === 'NAVIGATING' ? {
           center: { latitude: location.latitude, longitude: location.longitude },
           pitch: activePitch,
           heading: userHeading,
@@ -379,7 +474,13 @@ function MainNavigatorApp() {
         } : undefined}
       >
         {routeCoordinates.length > 0 && (
-          <Polyline coordinates={routeCoordinates} strokeWidth={6} strokeColor="#000000" />
+          <Polyline 
+            coordinates={routeCoordinates} 
+            strokeWidth={6} 
+            strokeColor={isDarkMode ? '#276EF1' : '#000000'} 
+            lineCap="round"
+            lineJoin="round"
+          />
         )}
 
         {currentSpeed === 0 && navState !== 'NAVIGATING' && (
@@ -429,10 +530,21 @@ function MainNavigatorApp() {
       {navState === 'PREVIEW' && destination && (
         <View style={[styles.previewCard, { backgroundColor: isDarkMode ? '#111111' : '#FFFFFF' }]}>
           <Text style={[styles.previewTitle, { color: isDarkMode ? '#FFFFFF' : '#111111' }]}>Destino: {destination.name}</Text>
-          <Text style={{ color: '#888888', marginBottom: 15 }}>Ruta lista • Vista general de origen y llegada</Text>
-          <View style={{ flexDirection: 'row', justifyContent: 'space-between' }}>
-            <TouchableOpacity style={styles.cancelPreviewBtn} onPress={() => { setNavState('IDLE'); setDestination(null); setRouteCoordinates([]); }}>
+          <Text style={{ color: '#276EF1', fontWeight: 'bold', fontSize: 15, marginBottom: 4 }}>
+            🚗 {routeSummary.distanceKm} km • ⏱️ {routeSummary.durationMin} min aprox.
+          </Text>
+          <Text style={{ color: '#888888', fontSize: 12, marginBottom: 14 }}>
+            Ruta trazada por calles y avenidas • Vista panorámica automática
+          </Text>
+          <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' }}>
+            <TouchableOpacity style={styles.cancelPreviewBtn} onPress={() => { setNavState('IDLE'); setDestination(null); setRouteCoordinates([]); setRouteSteps([]); }}>
               <Text style={{ color: '#FF3B30', fontWeight: 'bold' }}>Cancelar</Text>
+            </TouchableOpacity>
+            <TouchableOpacity 
+              style={styles.recenterBtn} 
+              onPress={() => mapRef.current?.fitToCoordinates(routeCoordinates, { edgePadding: { top: 230, right: 65, bottom: 180, left: 65 }, animated: true })}
+            >
+              <Text style={{ color: isDarkMode ? '#FFFFFF' : '#111111', fontWeight: 'bold', fontSize: 13 }}>🗺️ Encuadrar</Text>
             </TouchableOpacity>
             <TouchableOpacity style={styles.startNavBtn} onPress={handleStartNavigation}>
               <Text style={{ color: '#FFFFFF', fontWeight: 'bold' }}>Iniciar Recorrido</Text>
@@ -443,7 +555,7 @@ function MainNavigatorApp() {
 
       {navState === 'REROUTING' && (
         <View style={styles.reroutingBanner}>
-          <Text style={styles.reroutingText}>🔄 Desvío detectado: Recalculando ruta...</Text>
+          <Text style={styles.reroutingText}>🔄 Desvío detectado: Recalculando por calles...</Text>
         </View>
       )}
 
@@ -451,22 +563,24 @@ function MainNavigatorApp() {
         <>
           <View style={styles.navTopCard}>
             <View style={styles.navTopRow}>
-              <Text style={styles.navArrow}>↱</Text>
+              <Text style={styles.navArrow}>{nextInstruction.arrow}</Text>
               <View style={{ flex: 1 }}>
-                <Text style={styles.navDistText}>{isApproaching ? 'Llegando al destino' : 'Continuar ruta'}</Text>
-                <Text style={styles.navStreetTitle} numberOfLines={1}>
-                  {destination ? `Hacia ${destination.name}` : currentStreet}
+                <Text style={styles.navDistText}>
+                  {isApproaching ? 'Llegando al destino' : (nextInstruction.distMeters > 0 ? `En ${nextInstruction.distMeters} m` : 'Siga la ruta')}
+                </Text>
+                <Text style={styles.navStreetTitle} numberOfLines={2}>
+                  {nextInstruction.text}
                 </Text>
               </View>
-              <TouchableOpacity style={styles.toolsButton} onPress={() => setModalVisible(true)}>
-                <Text style={styles.toolsIcon}>⚙️</Text>
-                <Text style={styles.toolsText}>Tools</Text>
+              <TouchableOpacity style={styles.toolsButton} onPress={() => setIs3DMode(!is3DMode)}>
+                <Text style={styles.toolsIcon}>{is3DMode ? '🧭' : '🗺️'}</Text>
+                <Text style={styles.toolsText}>{is3DMode ? '3D' : '2D'}</Text>
               </TouchableOpacity>
             </View>
           </View>
 
           <View style={styles.speedLimitBadge}>
-            <Text style={styles.speedLimitNum}>60</Text>
+            <Text style={styles.speedLimitNum}>{activeAlert ? activeAlert.limit : 60}</Text>
             <Text style={styles.speedLimitLabel}>LÍMITE</Text>
           </View>
 
@@ -493,16 +607,16 @@ function MainNavigatorApp() {
           <Text style={{ color: '#888888', fontSize: 10, fontWeight: 'bold' }}>KM/H</Text>
         </View>
         <View style={{ flex: 1 }}>
-          <Text style={[styles.tripInfoTitle, { color: isDarkMode ? '#FFFFFF' : '#111111' }]}>
-            {destination ? destination.name : 'Navegación libre'}
+          <Text style={[styles.tripInfoTitle, { color: isDarkMode ? '#FFFFFF' : '#111111' }]} numberOfLines={1}>
+            {destination ? `${destination.name} (${routeSummary.distanceKm} km)` : 'Navegación libre'}
           </Text>
-          <Text style={{ color: '#888888', fontSize: 13, fontWeight: '600' }}>
+          <Text style={{ color: '#888888', fontSize: 13, fontWeight: '600' }} numberOfLines={1}>
             Circulando por: {currentStreet}
           </Text>
         </View>
-        {navState === 'NAVIGATING' && (
-          <TouchableOpacity onPress={() => { setNavState('IDLE'); setDestination(null); setRouteCoordinates([]); }}>
-            <Text style={{ color: '#FF3B30', fontWeight: 'bold' }}>Salir</Text>
+        {(navState === 'NAVIGATING' || navState === 'PREVIEW') && (
+          <TouchableOpacity onPress={() => { setNavState('IDLE'); setDestination(null); setRouteCoordinates([]); setRouteSteps([]); }}>
+            <Text style={{ color: '#FF3B30', fontWeight: 'bold', marginLeft: 8 }}>Salir</Text>
           </TouchableOpacity>
         )}
       </View>
@@ -527,17 +641,11 @@ function MainNavigatorApp() {
               keyExtractor={(item) => item.id}
               renderItem={({ item }) => (
                 <View style={[styles.favItem, { borderBottomColor: isDarkMode ? '#222222' : '#E2E2E2' }]}>
-                  <TouchableOpacity style={{ flex: 1 }} onPress={() => { 
-                    setDestination(item); 
-                    setNavState('PREVIEW'); 
+                  <TouchableOpacity style={{ flex: 1 }} onPress={async () => { 
+                    setDestination({ name: item.name, latitude: item.lat, longitude: item.lng }); 
                     setModalVisible(false);
-                    const favRoute = [{ latitude: location.latitude, longitude: location.longitude }, { latitude: item.lat, longitude: item.lng }];
-                    setRouteCoordinates(favRoute);
-                    setTimeout(() => {
-                      if (mapRef.current) {
-                        mapRef.current.fitToCoordinates(favRoute, { edgePadding: { top: 120, right: 80, bottom: 260, left: 80 }, animated: true });
-                      }
-                    }, 300);
+                    await fetchRealStreetRoute(location.latitude, location.longitude, item.lat, item.lng);
+                    setNavState('PREVIEW');
                   }}>
                     <Text style={[styles.favText, { color: isDarkMode ? '#FFFFFF' : '#111111' }]}>{item.name}</Text>
                     <Text style={{ color: '#888888', fontSize: 12 }}>{item.lat.toFixed(4)}, {item.lng.toFixed(4)}</Text>
@@ -575,40 +683,41 @@ const styles = StyleSheet.create({
   micButton: { padding: 8, marginRight: 5 },
   controlButton: { marginLeft: 8, paddingVertical: 8, paddingHorizontal: 10, borderRadius: 8 },
   previewCard: {
-    position: 'absolute', top: 55, left: 20, right: 20, borderRadius: 12, padding: 16, elevation: 8, shadowColor: '#000', shadowOffset: { width: 0, height: 4 }, shadowOpacity: 0.3, shadowRadius: 8
+    position: 'absolute', top: 50, left: 16, right: 16, borderRadius: 14, padding: 16, elevation: 8, shadowColor: '#000', shadowOffset: { width: 0, height: 4 }, shadowOpacity: 0.3, shadowRadius: 8
   },
-  previewTitle: { fontSize: 18, fontWeight: 'bold', marginBottom: 5 },
-  startNavBtn: { backgroundColor: '#276EF1', paddingVertical: 10, paddingHorizontal: 20, borderRadius: 8 },
-  cancelPreviewBtn: { paddingVertical: 10, paddingHorizontal: 20, justifyContent: 'center' },
+  previewTitle: { fontSize: 18, fontWeight: 'bold', marginBottom: 4 },
+  startNavBtn: { backgroundColor: '#276EF1', paddingVertical: 10, paddingHorizontal: 16, borderRadius: 8 },
+  cancelPreviewBtn: { paddingVertical: 10, paddingHorizontal: 10, justifyContent: 'center' },
+  recenterBtn: { backgroundColor: 'rgba(150,150,150,0.2)', paddingVertical: 10, paddingHorizontal: 12, borderRadius: 8 },
   reroutingBanner: {
-    position: 'absolute', top: 130, alignSelf: 'center', backgroundColor: '#FF9500', paddingVertical: 8, paddingHorizontal: 16, borderRadius: 20, elevation: 6
+    position: 'absolute', top: 140, alignSelf: 'center', backgroundColor: '#FF9500', paddingVertical: 8, paddingHorizontal: 16, borderRadius: 20, elevation: 6
   },
   reroutingText: { color: '#FFFFFF', fontWeight: 'bold', fontSize: 14 },
   navTopCard: {
-    position: 'absolute', top: 45, left: 20, right: 20, backgroundColor: '#000000', borderRadius: 14, padding: 16, elevation: 8
+    position: 'absolute', top: 45, left: 16, right: 16, backgroundColor: '#000000', borderRadius: 14, padding: 16, elevation: 8
   },
   navTopRow: { flexDirection: 'row', alignItems: 'center' },
   navArrow: { color: '#FFFFFF', fontSize: 36, fontWeight: 'bold', marginRight: 15 },
   navDistText: { color: '#AAAAAA', fontSize: 14, fontWeight: '600' },
-  navStreetTitle: { color: '#FFFFFF', fontSize: 22, fontWeight: 'bold' },
+  navStreetTitle: { color: '#FFFFFF', fontSize: 19, fontWeight: 'bold' },
   toolsButton: { backgroundColor: '#222222', borderRadius: 24, paddingVertical: 6, paddingHorizontal: 10, alignItems: 'center', justifyContent: 'center', marginLeft: 10 },
   toolsIcon: { fontSize: 16 },
   toolsText: { color: '#AAAAAA', fontSize: 10, fontWeight: 'bold', marginTop: 2 },
   speedLimitBadge: {
-    position: 'absolute', top: 180, left: 20, backgroundColor: '#FFFFFF', borderRadius: 10, paddingVertical: 8, paddingHorizontal: 12, alignItems: 'center', elevation: 6
+    position: 'absolute', top: 185, left: 20, backgroundColor: '#FFFFFF', borderRadius: 10, paddingVertical: 8, paddingHorizontal: 12, alignItems: 'center', elevation: 6
   },
   speedLimitNum: { fontSize: 22, fontWeight: 'bold', color: '#111111' },
   speedLimitLabel: { fontSize: 9, fontWeight: 'bold', color: '#666666' },
   currentStreetBadge: {
-    position: 'absolute', bottom: 140, alignSelf: 'center', backgroundColor: '#111111', paddingVertical: 6, paddingHorizontal: 16, borderRadius: 8, elevation: 4
+    position: 'absolute', bottom: 120, alignSelf: 'center', backgroundColor: '#111111', paddingVertical: 6, paddingHorizontal: 16, borderRadius: 8, elevation: 4
   },
-  currentStreetBadgeText: { color: '#FFFFFF', fontWeight: 'bold', fontSize: 15 },
+  currentStreetBadgeText: { color: '#FFFFFF', fontWeight: 'bold', fontSize: 14 },
   alertBanner: {
-    position: 'absolute', top: 130, left: 20, right: 20, padding: 12, borderRadius: 8, alignItems: 'center', elevation: 4
+    position: 'absolute', top: 145, left: 16, right: 16, padding: 12, borderRadius: 8, alignItems: 'center', elevation: 5
   },
-  alertText: { color: '#FFFFFF', fontWeight: 'bold', fontSize: 15 },
+  alertText: { color: '#FFFFFF', fontWeight: 'bold', fontSize: 14 },
   bottomStreetCard: {
-    position: 'absolute', bottom: 35, left: 20, right: 20, borderRadius: 12, borderWidth: 1, paddingVertical: 14, paddingHorizontal: 20, flexDirection: 'row', alignItems: 'center', elevation: 6
+    position: 'absolute', bottom: 30, left: 16, right: 16, borderRadius: 12, borderWidth: 1, paddingVertical: 14, paddingHorizontal: 18, flexDirection: 'row', alignItems: 'center', elevation: 6
   },
   speedometerContainer: {
     alignItems: 'center', justifyContent: 'center', marginRight: 15, paddingRight: 15, borderRightWidth: 1, borderRightColor: '#444'
