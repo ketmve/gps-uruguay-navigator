@@ -1,742 +1,573 @@
+cat << 'EOF' > src/app/index.tsx
 import React, { useState, useEffect, useRef } from 'react';
-import { 
-  StyleSheet, 
-  View, 
-  TextInput, 
-  StatusBar, 
-  Text, 
-  Vibration, 
-  TouchableOpacity, 
-  Modal, 
-  FlatList, 
+import {
+  StyleSheet,
+  View,
+  Text,
+  TextInput,
+  TouchableOpacity,
+  ActivityIndicator,
+  Alert,
   SafeAreaView,
-  Keyboard,
-  ScrollView
+  Platform,
+  StatusBar,
 } from 'react-native';
-import MapView, { Marker, Polyline } from 'react-native-maps';
-import AsyncStorage from '@react-native-async-storage/async-storage';
-import * as SunCalc from 'suncalc';
-import * as Speech from 'expo-speech';
+import { WebView } from 'react-native-webview';
 import * as Location from 'expo-location';
+import * as Speech from 'expo-speech';
 
-class ErrorBoundary extends React.Component {
-  state = { hasError: false, error: null };
-
-  static getDerivedStateFromError(error) {
-    return { hasError: true, error };
-  }
-
-  componentDidCatch(error, errorInfo) {
-    console.error("Error capturado:", error, errorInfo);
-  }
-
-  render() {
-    if (this.state.hasError) {
-      return (
-        <SafeAreaView style={styles.errorContainer}>
-          <ScrollView contentContainerStyle={{ padding: 20 }}>
-            <Text style={styles.errorTitle}>⚠️ Error detectado:</Text>
-            <Text style={styles.errorMessage}>{this.state.error?.toString()}</Text>
-            <TouchableOpacity 
-              style={styles.errorButton}
-              onPress={() => this.setState({ hasError: false, error: null })}
-            >
-              <Text style={styles.errorButtonText}>Reiniciar App</Text>
-            </TouchableOpacity>
-          </ScrollView>
-        </SafeAreaView>
-      );
-    }
-    return this.props.children;
-  }
+interface Radar {
+  id: string;
+  name: string;
+  lat: number;
+  lon: number;
+  limit: number;
+  zone: string;
 }
 
-const radaresData = {
-  "type": "FeatureCollection",
-  "features": [
-    { "type": "Feature", "geometry": { "type": "Point", "coordinates": [-56.140442, -34.909668] }, "properties": { "id": "IM-01", "nombre": "Rambla Rep. del Perú y Basilio Pereyra", "limite_velocidad_kmh": 60, "heading_orientacion": 110, "tolerancia_grados": 30 } },
-    { "type": "Feature", "geometry": { "type": "Point", "coordinates": [-56.169008, -34.917674] }, "properties": { "id": "IM-02", "nombre": "Rambla Wilson y Dr. Juan A. Cachón", "limite_velocidad_kmh": 60, "heading_orientacion": 110, "tolerancia_grados": 30 } },
-    { "type": "Feature", "geometry": { "type": "Point", "coordinates": [-56.054413, -34.890908] }, "properties": { "id": "IM-03", "nombre": "Rambla Rep. de México y Costa Rica", "limite_velocidad_kmh": 60, "heading_orientacion": 90, "tolerancia_grados": 30 } },
-    { "type": "Feature", "geometry": { "type": "Point", "coordinates": [-56.154894, -34.924922] }, "properties": { "id": "IM-04", "nombre": "Rambla M. Gandhi y Solano García", "limite_velocidad_kmh": 60, "heading_orientacion": 110, "tolerancia_grados": 30 } },
-    { "type": "Feature", "geometry": { "type": "Point", "coordinates": [-56.104404, -34.896148] }, "properties": { "id": "IM-05", "nombre": "Rambla O'Higgins y 18 de Diciembre", "limite_velocidad_kmh": 60, "heading_orientacion": 90, "tolerancia_grados": 30 } },
-    { "type": "Feature", "geometry": { "type": "Point", "coordinates": [-56.082155, -34.887644] }, "properties": { "id": "IM-06", "nombre": "Rambla e Ibiza", "limite_velocidad_kmh": 60, "heading_orientacion": 90, "tolerancia_grados": 30 } },
-    { "type": "Feature", "geometry": { "type": "Point", "coordinates": [-56.114457, -34.887159] }, "properties": { "id": "IM-07", "nombre": "Av. Italia y Caldas", "limite_velocidad_kmh": 60, "heading_orientacion": 90, "tolerancia_grados": 30 } },
-    { "type": "Feature", "geometry": { "type": "Point", "coordinates": [-56.121302, -34.887040] }, "properties": { "id": "IM-08", "nombre": "Av. Italia y Mataojo", "limite_velocidad_kmh": 60, "heading_orientacion": 90, "tolerancia_grados": 30 } },
-    { "type": "Feature", "geometry": { "type": "Point", "coordinates": [-56.138865, -34.874085] }, "properties": { "id": "IM-09", "nombre": "Av. 8 de Octubre y Larravide", "limite_velocidad_kmh": 45, "heading_orientacion": 270, "tolerancia_grados": 30 } },
-    { "type": "Feature", "geometry": { "type": "Point", "coordinates": [-56.149200, -34.883500] }, "properties": { "id": "IM-10", "nombre": "Av. 8 de Octubre y Pan de Azúcar", "limite_velocidad_kmh": 45, "heading_orientacion": 90, "tolerancia_grados": 30 } },
-    { "type": "Feature", "geometry": { "type": "Point", "coordinates": [-56.221500, -34.851200] }, "properties": { "id": "MTOP-R5-01", "nombre": "Ruta 5 km 12 (Accesos a Montevideo)", "limite_velocidad_kmh": 75, "heading_orientacion": 0, "tolerancia_grados": 45 } },
-    { "type": "Feature", "geometry": { "type": "Point", "coordinates": [-56.321000, -34.781200] }, "properties": { "id": "MTOP-R5-02", "nombre": "Ruta 5 km 25 (Las Piedras / La Paz)", "limite_velocidad_kmh": 60, "heading_orientacion": 180, "tolerancia_grados": 45 } },
-    { "type": "Feature", "geometry": { "type": "Point", "coordinates": [-55.912000, -34.810000] }, "properties": { "id": "MTOP-RIB-01", "nombre": "Ruta Interbalnearia km 24 (El Pinar)", "limite_velocidad_kmh": 75, "heading_orientacion": 90, "tolerancia_grados": 45 } },
-    { "type": "Feature", "geometry": { "type": "Point", "coordinates": [-56.350000, -34.750000] }, "properties": { "id": "MTOP-R1-01", "nombre": "Ruta 1 km 20 (Cruce Cno. Melilla)", "limite_velocidad_kmh": 75, "heading_orientacion": 270, "tolerancia_grados": 45 } },
-    { "type": "Feature", "geometry": { "type": "Point", "coordinates": [-56.012500, -34.821000] }, "properties": { "id": "MTOP-R8-01", "nombre": "Ruta 8 km 22 (Barros Blancos)", "limite_velocidad_kmh": 60, "heading_orientacion": 45, "tolerancia_grados": 45 } },
-    { "type": "Feature", "geometry": { "type": "Point", "coordinates": [-56.281200, -34.831500] }, "properties": { "id": "MTOP-R102-01", "nombre": "Ruta 102 km 18 (Anillo Perimetral)", "limite_velocidad_kmh": 80, "heading_orientacion": 90, "tolerancia_grados": 45 } }
-  ]
-};
+const RADARES_URUGUAY: Radar[] = [
+  { id: 'mvd-1', name: 'Rambla y Sarandí', lat: -34.9096, lon: -56.2122, limit: 45, zone: 'Montevideo' },
+  { id: 'mvd-2', name: 'Rambla y Ejido', lat: -34.9135, lon: -56.1887, limit: 60, zone: 'Montevideo' },
+  { id: 'mvd-3', name: 'Rambla y Bv. Artigas', lat: -34.9221, lon: -56.1611, limit: 60, zone: 'Montevideo' },
+  { id: 'mvd-4', name: 'Av. Italia y Centenario', lat: -34.8906, lon: -56.1525, limit: 60, zone: 'Montevideo' },
+  { id: 'mvd-5', name: 'Av. Italia y Bolivia', lat: -34.8832, lon: -56.0853, limit: 60, zone: 'Montevideo' },
+  { id: 'mvd-6', name: 'Bv. Artigas y 18 de Julio', lat: -34.8975, lon: -56.1645, limit: 45, zone: 'Montevideo' },
+  { id: 'mvd-7', name: 'Av. 8 de Octubre y L.A. de Herrera', lat: -34.8781, lon: -56.1489, limit: 45, zone: 'Montevideo' },
+  { id: 'mvd-8', name: 'Accesos Ruta 1 y Santín Carlos Rossi', lat: -34.8551, lon: -56.2452, limit: 75, zone: 'Montevideo' },
+  { id: 'nac-1', name: 'Ruta Interbalnearia Km 22 (Shangrilá)', lat: -34.8562, lon: -55.9845, limit: 60, zone: 'Canelones' },
+  { id: 'nac-2', name: 'Ruta Interbalnearia Km 36 (Salinas)', lat: -34.7745, lon: -55.8391, limit: 75, zone: 'Canelones' },
+  { id: 'nac-3', name: 'Ruta Interbalnearia Km 65 (La Floresta)', lat: -34.7521, lon: -55.6789, limit: 75, zone: 'Canelones' },
+  { id: 'nac-4', name: 'Ruta 5 Km 18 (Las Piedras)', lat: -34.7365, lon: -56.2185, limit: 60, zone: 'Canelones' },
+  { id: 'nac-5', name: 'Ruta 1 Km 42 (Libertad)', lat: -34.6368, lon: -56.6182, limit: 75, zone: 'San José' },
+  { id: 'nac-6', name: 'Ruta 8 Km 29 (Pando)', lat: -34.7185, lon: -55.9589, limit: 60, zone: 'Canelones' },
+  { id: 'nac-7', name: 'Ruta 9 Km 142 (San Carlos)', lat: -34.7985, lon: -54.9182, limit: 75, zone: 'Maldonado' },
+];
 
-const getDistanceFromLatLonInMeters = (lat1, lon1, lat2, lon2) => {
-  const R = 6371e3;
-  const dLat = (lat2 - lat1) * (Math.PI / 180);
-  const dLon = (lon2 - lon1) * (Math.PI / 180);
+function getDistanceMeters(lat1: number, lon1: number, lat2: number, lon2: number): number {
+  const R = 6371000;
+  const dLat = ((lat2 - lat1) * Math.PI) / 180;
+  const dLon = ((lon2 - lon1) * Math.PI) / 180;
   const a =
     Math.sin(dLat / 2) * Math.sin(dLat / 2) +
-    Math.cos(lat1 * (Math.PI / 180)) * Math.cos(lat2 * (Math.PI / 180)) *
-    Math.sin(dLon / 2) * Math.sin(dLon / 2);
+    Math.cos((lat1 * Math.PI) / 180) *
+      Math.cos((lat2 * Math.PI) / 180) *
+      Math.sin(dLon / 2) *
+      Math.sin(dLon / 2);
   const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
   return R * c;
-};
+}
 
-const translateManeuver = (step) => {
-  if (!step || !step.maneuver) return { text: 'Continúe por la ruta', arrow: '↑' };
-  const { type, modifier } = step.maneuver;
-  const street = step.name ? ` hacia ${step.name}` : '';
-
-  if (type === 'arrive') return { text: 'Ha llegado a su destino', arrow: '🏁' };
-  if (type === 'roundabout' || type === 'rotary') return { text: `Entre a la rotonda${street}`, arrow: '🔄' };
-  if (modifier === 'left' || modifier === 'sharp left') return { text: `Gire a la izquierda${street}`, arrow: '↰' };
-  if (modifier === 'slight left') return { text: `Manténgase a la izquierda${street}`, arrow: '↖' };
-  if (modifier === 'right' || modifier === 'sharp right') return { text: `Gire a la derecha${street}`, arrow: '↱' };
-  if (modifier === 'slight right') return { text: `Manténgase a la derecha${street}`, arrow: '↗' };
-  if (modifier === 'uturn') return { text: `Dé vuelta en U${street}`, arrow: '↩' };
-  return { text: `Continúe recto${street}`, arrow: '↑' };
-};
-
-function MainNavigatorApp() {
-  const mapRef = useRef(null);
-  const inputRef = useRef(null);
-  const lastSpokenStepRef = useRef('');
-
-  const [isDarkMode, setIsDarkMode] = useState(false);
-  const [favorites, setFavorites] = useState([]);
-  const [searchQuery, setSearchQuery] = useState('');
-  const [activeAlert, setActiveAlert] = useState(null);
-  const [permissionGranted, setPermissionGranted] = useState(false);
-  
-  const [is3DMode, setIs3DMode] = useState(true);
-  const [currentStreet, setCurrentStreet] = useState("Ubicando calle...");
-  const [currentSpeed, setCurrentSpeed] = useState(0);
-  const [userHeading, setUserHeading] = useState(0);
-
-  const [navState, setNavState] = useState('IDLE');
-  const [destination, setDestination] = useState(null);
-  const [routeCoordinates, setRouteCoordinates] = useState([]);
-  const [routeSteps, setRouteSteps] = useState([]);
-  const [routeSummary, setRouteSummary] = useState({ distanceKm: 0, durationMin: 0 });
-  const [nextInstruction, setNextInstruction] = useState({ text: 'Continúe por la ruta', arrow: '↑', distMeters: 0 });
-  
-  const [modalVisible, setModalVisible] = useState(false);
-  const [newFavName, setNewFavName] = useState('');
-  
-  const [location, setLocation] = useState({
-    latitude: -34.9011,
-    longitude: -56.1645,
-    latitudeDelta: 0.005,
-    longitudeDelta: 0.005,
-  });
-
-  // Auto-zoom automático siempre que entramos a PREVIEW y tenemos coordenadas de ruta
-  useEffect(() => {
-    if (navState === 'PREVIEW' && routeCoordinates.length >= 2 && mapRef.current) {
-      const timer = setTimeout(() => {
-        mapRef.current?.fitToCoordinates(routeCoordinates, {
-          edgePadding: { top: 230, right: 65, bottom: 180, left: 65 },
-          animated: true,
-        });
-      }, 250);
-      return () => clearTimeout(timer);
+const LEAFLET_HTML = `
+<!DOCTYPE html>
+<html>
+<head>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+  <style>
+    html, body, #map { margin: 0; padding: 0; width: 100%; height: 100%; background: #e5e7eb; }
+    .radar-badge {
+      background: #dc2626;
+      color: white;
+      border: 2px solid white;
+      border-radius: 50%;
+      width: 26px;
+      height: 26px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-weight: bold;
+      font-size: 11px;
+      font-family: sans-serif;
+      box-shadow: 0 2px 4px rgba(0,0,0,0.4);
     }
-  }, [navState, routeCoordinates]);
+    .user-dot {
+      background: #2563eb;
+      border: 3px solid white;
+      border-radius: 50%;
+      width: 16px;
+      height: 16px;
+      box-shadow: 0 0 10px rgba(37,99,235,0.8);
+    }
+  </style>
+</head>
+<body>
+  <div id="map"></div>
+  <script>
+    const map = L.map('map', { zoomControl: false }).setView([-34.9011, -56.1645], 13);
+    L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+      maxZoom: 19,
+      attribution: '© OpenStreetMap'
+    }).addTo(map);
 
-  useEffect(() => {
-    let subscriber = null;
+    let userMarker = null;
+    let destMarker = null;
+    let routeLine = null;
+    let followUser = true;
 
-    const startLocationTracking = async () => {
-      try {
-        let { status } = await Location.requestForegroundPermissionsAsync();
-        if (status !== 'granted') {
-          setCurrentStreet("Permiso de ubicación denegado");
-          return;
+    map.on('dragstart', () => { followUser = false; });
+
+    window.initRadars = function(radars) {
+      radars.forEach(r => {
+        const icon = L.divIcon({
+          className: '',
+          html: '<div class="radar-badge">' + r.limit + '</div>',
+          iconSize: [26, 26],
+          iconAnchor: [13, 13]
+        });
+        L.marker([r.lat, r.lon], { icon })
+          .addTo(map)
+          .bindPopup('<b>Radar ' + r.zone + '</b><br>' + r.name + '<br>Máxima: ' + r.limit + ' km/h');
+      });
+    };
+
+    window.updateUserLocation = function(lat, lon) {
+      if (!userMarker) {
+        const icon = L.divIcon({
+          className: '',
+          html: '<div class="user-dot"></div>',
+          iconSize: [22, 22],
+          iconAnchor: [11, 11]
+        });
+        userMarker = L.marker([lat, lon], { icon, zIndexOffset: 1000 }).addTo(map);
+        map.setView([lat, lon], 15);
+      } else {
+        userMarker.setLatLng([lat, lon]);
+        if (followUser) {
+          map.panTo([lat, lon]);
         }
-        setPermissionGranted(true);
-
-        subscriber = await Location.watchPositionAsync(
-          {
-            accuracy: Location.Accuracy.High,
-            timeInterval: 2000,
-            distanceInterval: 5,
-          },
-          async (loc) => {
-            const { latitude, longitude, heading, speed } = loc.coords;
-            
-            setLocation((prev) => ({
-              ...prev,
-              latitude,
-              longitude,
-            }));
-
-            if (heading !== null && heading !== undefined) {
-              setUserHeading(heading);
-            }
-
-            const speedKmh = speed && speed > 0 ? Math.round(speed * 3.6) : 0;
-            setCurrentSpeed(speedKmh);
-
-            checkRadarsProximity(latitude, longitude, heading || 0, speedKmh);
-
-            try {
-              const reverse = await Location.reverseGeocodeAsync({ latitude, longitude });
-              if (reverse && reverse.length > 0) {
-                const streetName = reverse[0].street || reverse[0].name;
-                if (streetName) setCurrentStreet(streetName);
-              }
-            } catch (e) {}
-
-            if (navState === 'NAVIGATING' && destination) {
-              const distToDest = getDistanceFromLatLonInMeters(latitude, longitude, destination.latitude, destination.longitude);
-              
-              if (distToDest < 25) {
-                speakMessage("Ha llegado a su destino. Finalizando recorrido.");
-                setNavState('IDLE');
-                setDestination(null);
-                setRouteCoordinates([]);
-                setRouteSteps([]);
-                return;
-              }
-
-              updateTurnByTurnProgress(latitude, longitude);
-              checkOffRoute(latitude, longitude);
-            }
-          }
-        );
-      } catch (e) {
-        console.error("Error en localización:", e);
       }
     };
 
-    startLocationTracking();
+    window.centerOnUser = function(lat, lon) {
+      followUser = true;
+      map.setView([lat, lon], 16);
+    };
+
+    window.drawRoute = function(coords, destLat, destLon, destLabel) {
+      followUser = false;
+      if (routeLine) map.removeLayer(routeLine);
+      if (destMarker) map.removeLayer(destMarker);
+
+      routeLine = L.polyline(coords, {
+        color: '#2563eb',
+        weight: 6,
+        opacity: 0.85
+      }).addTo(map);
+
+      destMarker = L.marker([destLat, destLon])
+        .addTo(map)
+        .bindPopup('<b>Destino:</b><br>' + destLabel)
+        .openPopup();
+
+      map.fitBounds(routeLine.getBounds(), { padding: [55, 55] });
+    };
+
+    window.clearRoute = function(lat, lon) {
+      if (routeLine) { map.removeLayer(routeLine); routeLine = null; }
+      if (destMarker) { map.removeLayer(destMarker); destMarker = null; }
+      followUser = true;
+      if (lat && lon) map.setView([lat, lon], 15);
+    };
+  </script>
+</body>
+</html>
+`;
+
+export default function GpsUruguayScreen() {
+  const webViewRef = useRef<WebView>(null);
+  const [location, setLocation] = useState<{ lat: number; lon: number }>({
+    lat: -34.9011,
+    lon: -56.1645,
+  });
+  const [speedKmh, setSpeedKmh] = useState<number>(0);
+  const [searchQuery, setSearchQuery] = useState<string>('');
+  const [loadingRoute, setLoadingRoute] = useState<boolean>(false);
+  const [routeInfo, setRouteInfo] = useState<{
+    distanceKm: string;
+    durationMin: number;
+    destName: string;
+  } | null>(null);
+  const [activeRadar, setActiveRadar] = useState<Radar | null>(null);
+  const [mapReady, setMapReady] = useState<boolean>(false);
+  const lastAlertedId = useRef<string | null>(null);
+
+  useEffect(() => {
+    let subscriber: Location.LocationSubscription | null = null;
+
+    (async () => {
+      const { status } = await Location.requestForegroundPermissionsAsync();
+      if (status !== 'granted') {
+        Alert.alert(
+          'Permiso de ubicación',
+          'Activa el GPS para navegar en tiempo real y recibir alertas de radares en Uruguay.'
+        );
+        return;
+      }
+
+      const initial = await Location.getCurrentPositionAsync({
+        accuracy: Location.Accuracy.High,
+      });
+      const initCoords = {
+        lat: initial.coords.latitude,
+        lon: initial.coords.longitude,
+      };
+      setLocation(initCoords);
+
+      subscriber = await Location.watchPositionAsync(
+        {
+          accuracy: Location.Accuracy.BestForNavigation,
+          timeInterval: 2000,
+          distanceInterval: 5,
+        },
+        (loc) => {
+          const lat = loc.coords.latitude;
+          const lon = loc.coords.longitude;
+          const currentSpeed = loc.coords.speed ? Math.max(0, Math.round(loc.coords.speed * 3.6)) : 0;
+
+          setLocation({ lat, lon });
+          setSpeedKmh(currentSpeed);
+
+          webViewRef.current?.injectJavaScript(
+            `if (window.updateUserLocation) { window.updateUserLocation(${lat}, ${lon}); } true;`
+          );
+
+          checkNearbyRadars(lat, lon);
+        }
+      );
+    })();
 
     return () => {
       if (subscriber) subscriber.remove();
     };
-  }, [navState, destination, routeCoordinates, routeSteps]);
-
-  useEffect(() => {
-    const updateThemeBySun = () => {
-      try {
-        const sunCalcLib = SunCalc.default || SunCalc;
-        if (sunCalcLib && sunCalcLib.getTimes) {
-          const times = sunCalcLib.getTimes(new Date(), location.latitude, location.longitude);
-          const now = new Date();
-          const night = now > times.sunset || now < times.sunrise;
-          setIsDarkMode(night);
-        }
-      } catch (e) {}
-    };
-
-    updateThemeBySun();
-    const interval = setInterval(updateThemeBySun, 60000);
-    return () => clearInterval(interval);
-  }, [location]);
-
-  useEffect(() => {
-    const loadFavorites = async () => {
-      try {
-        const savedFavorites = await AsyncStorage.getItem('@user_favorites');
-        if (savedFavorites) setFavorites(JSON.parse(savedFavorites));
-      } catch (e) {}
-    };
-    loadFavorites();
   }, []);
 
-  const speakMessage = (message) => {
+  useEffect(() => {
+    if (mapReady) {
+      const radarsJson = JSON.stringify(RADARES_URUGUAY);
+      webViewRef.current?.injectJavaScript(
+        `if (window.initRadars) { window.initRadars(${radarsJson}); window.updateUserLocation(${location.lat}, ${location.lon}); } true;`
+      );
+    }
+  }, [mapReady]);
+
+  const checkNearbyRadars = (lat: number, lon: number) => {
+    let closest: Radar | null = null;
+    let minDist = Infinity;
+
+    for (const r of RADARES_URUGUAY) {
+      const d = getDistanceMeters(lat, lon, r.lat, r.lon);
+      if (d <= 350 && d < minDist) {
+        minDist = d;
+        closest = r;
+      }
+    }
+
+    setActiveRadar(closest);
+
+    if (closest && lastAlertedId.current !== closest.id) {
+      lastAlertedId.current = closest.id;
+      Speech.speak(
+        `Atención, radar de velocidad a ${Math.round(minDist)} metros. Máxima ${closest.limit} kilómetros por hora.`,
+        { language: 'es-UY', rate: 1.0 }
+      );
+    } else if (!closest) {
+      lastAlertedId.current = null;
+    }
+  };
+
+  const handleSearchAndRoute = async () => {
+    const query = searchQuery.trim();
+    if (!query) return;
+
+    setLoadingRoute(true);
     try {
-      Speech.isSpeakingAsync().then((speaking) => {
-        if (speaking) Speech.stop();
-        Speech.speak(message, { language: 'es-ES', pitch: 1.0, rate: 1.0 });
+      const geoUrl = `https://nominatim.openstreetmap.org/search?format=json&countrycodes=uy&limit=1&q=${encodeURIComponent(
+        query
+      )}`;
+      const geoRes = await fetch(geoUrl, {
+        headers: { 'User-Agent': 'GpsUruguayNavigator/1.0' },
       });
-    } catch (e) {}
-  };
+      const geoData = await geoRes.json();
 
-  // Consulta ruta real por calles y avenidas mediante OSRM
-  const fetchRealStreetRoute = async (startLat, startLng, endLat, endLng) => {
-    try {
-      const url = `https://router.project-osrm.org/route/v1/driving/${startLng},${startLat};${endLng},${endLat}?overview=full&geometries=geojson&steps=true`;
-      const response = await fetch(url);
-      const data = await response.json();
-
-      if (data.code === 'Ok' && data.routes && data.routes.length > 0) {
-        const route = data.routes[0];
-        const coords = route.geometry.coordinates.map(([lng, lat]) => ({
-          latitude: lat,
-          longitude: lng,
-        }));
-
-        const steps = (route.legs && route.legs[0] && route.legs[0].steps) ? route.legs[0].steps : [];
-        const distanceKm = (route.distance / 1000).toFixed(1);
-        const durationMin = Math.max(1, Math.round(route.duration / 60));
-
-        setRouteCoordinates(coords);
-        setRouteSteps(steps);
-        setRouteSummary({ distanceKm, durationMin });
-
-        if (steps.length > 0) {
-          const firstStep = steps.length > 1 ? steps[1] : steps[0];
-          const translated = translateManeuver(firstStep);
-          setNextInstruction({
-            text: translated.text,
-            arrow: translated.arrow,
-            distMeters: Math.round(steps[0].distance || 0),
-          });
-        }
-        return true;
+      if (!geoData || geoData.length === 0) {
+        Alert.alert('Destino no encontrado', 'Prueba con una calle, esquina o ciudad de Uruguay.');
+        setLoadingRoute(false);
+        return;
       }
-    } catch (e) {
-      console.error("Error obteniendo ruta OSRM:", e);
-    }
 
-    // Respaldo en caso de fallo de red
-    setRouteCoordinates([
-      { latitude: startLat, longitude: startLng },
-      { latitude: endLat, longitude: endLng },
-    ]);
-    setRouteSteps([]);
-    setRouteSummary({
-      distanceKm: (getDistanceFromLatLonInMeters(startLat, startLng, endLat, endLng) / 1000).toFixed(1),
-      durationMin: 10,
-    });
-    return false;
-  };
+      const destLat = parseFloat(geoData[0].lat);
+      const destLon = parseFloat(geoData[0].lon);
+      const destLabel = geoData[0].display_name.split(',').slice(0, 2).join(', ');
 
-  const updateTurnByTurnProgress = (userLat, userLng) => {
-    if (!routeSteps || routeSteps.length === 0) return;
+      const osrmUrl = `https://router.project-osrm.org/route/v1/driving/${location.lon},${location.lat};${destLon},${destLat}?overview=full&geometries=geojson`;
+      const routeRes = await fetch(osrmUrl);
+      const routeData = await routeRes.json();
 
-    let closestStepIndex = 0;
-    let minDist = 999999;
-
-    routeSteps.forEach((step, idx) => {
-      if (step.maneuver && step.maneuver.location) {
-        const [sLng, sLat] = step.maneuver.location;
-        const d = getDistanceFromLatLonInMeters(userLat, userLng, sLat, sLng);
-        if (d < minDist) {
-          minDist = d;
-          closestStepIndex = idx;
-        }
+      if (!routeData.routes || routeData.routes.length === 0) {
+        Alert.alert('Ruta no disponible', 'No se pudo trazar una ruta por calles hasta ese destino.');
+        setLoadingRoute(false);
+        return;
       }
-    });
 
-    const upcomingIndex = Math.min(closestStepIndex + 1, routeSteps.length - 1);
-    const upcomingStep = routeSteps[upcomingIndex];
-    if (upcomingStep && upcomingStep.maneuver && upcomingStep.maneuver.location) {
-      const [uLng, uLat] = upcomingStep.maneuver.location;
-      const distToTurn = Math.round(getDistanceFromLatLonInMeters(userLat, userLng, uLat, uLng));
-      const translated = translateManeuver(upcomingStep);
+      const bestRoute = routeData.routes[0];
+      const latLngCoords = bestRoute.geometry.coordinates.map((c: [number, number]) => [c[1], c[0]]);
+      const distanceKm = (bestRoute.distance / 1000).toFixed(1);
+      const durationMin = Math.max(1, Math.round(bestRoute.duration / 60));
 
-      setNextInstruction({
-        text: translated.text,
-        arrow: translated.arrow,
-        distMeters: distToTurn,
-      });
+      setRouteInfo({ distanceKm, durationMin, destName: destLabel });
 
-      const stepKey = `${upcomingIndex}-${translated.text}`;
-      if (distToTurn <= 120 && lastSpokenStepRef.current !== stepKey) {
-        lastSpokenStepRef.current = stepKey;
-        speakMessage(`En ${distToTurn} metros, ${translated.text}`);
-      }
+      const coordsJson = JSON.stringify(latLngCoords);
+      const safeLabel = JSON.stringify(destLabel);
+      webViewRef.current?.injectJavaScript(
+        `if (window.drawRoute) { window.drawRoute(${coordsJson}, ${destLat}, ${destLon}, ${safeLabel}); } true;`
+      );
+
+      Speech.speak(
+        `Ruta calculada hacia ${destLabel}. Distancia ${distanceKm} kilómetros, tiempo estimado ${durationMin} minutos.`,
+        { language: 'es-UY' }
+      );
+    } catch (err) {
+      Alert.alert('Error de conexión', 'Verifica tu conexión a internet para calcular la ruta.');
+    } finally {
+      setLoadingRoute(false);
     }
   };
 
-  const checkRadarsProximity = (userLat, userLng, userHeading, speedKmh) => {
-    let alertFound = null;
-    radaresData.features.forEach((radar) => {
-      const [radarLng, radarLat] = radar.geometry.coordinates;
-      const distance = getDistanceFromLatLonInMeters(userLat, userLng, radarLat, radarLng);
-      if (distance <= 500) {
-        const radarHeading = radar.properties.heading_orientacion;
-        const tolerance = radar.properties.tolerancia_grados || 30;
-        let angleDiff = Math.abs(userHeading - radarHeading);
-        if (angleDiff > 180) angleDiff = 360 - angleDiff;
-        if (angleDiff <= tolerance) {
-          alertFound = {
-            name: radar.properties.nombre,
-            limit: radar.properties.limite_velocidad_kmh,
-            distance: Math.round(distance),
-            isSpeeding: speedKmh > radar.properties.limite_velocidad_kmh,
-          };
-        }
-      }
-    });
-
-    if (alertFound && (!activeAlert || activeAlert.name !== alertFound.name)) {
-      setActiveAlert(alertFound);
-      Vibration.vibrate(200);
-      const warningText = alertFound.isSpeeding 
-        ? `¡Atención! Reduzca velocidad. Radar a ${alertFound.distance} metros. Límite, ${alertFound.limit} kilómetros por hora.`
-        : `Atención. Radar a ${alertFound.distance} metros. Límite, ${alertFound.limit} kilómetros por hora.`;
-      speakMessage(warningText);
-    } else if (!alertFound) {
-      setActiveAlert(null);
-    }
+  const handleClearRoute = () => {
+    setRouteInfo(null);
+    setSearchQuery('');
+    webViewRef.current?.injectJavaScript(
+      `if (window.clearRoute) { window.clearRoute(${location.lat}, ${location.lon}); } true;`
+    );
   };
 
-  const checkOffRoute = async (userLat, userLng) => {
-    if (routeCoordinates.length === 0) return;
-    let minDistance = 999999;
-    routeCoordinates.forEach(coord => {
-      const d = getDistanceFromLatLonInMeters(userLat, userLng, coord.latitude, coord.longitude);
-      if (d < minDistance) minDistance = d;
-    });
-
-    if (minDistance > 60) {
-      setNavState('REROUTING');
-      speakMessage("Desvío detectado. Recalculando ruta...");
-      await fetchRealStreetRoute(userLat, userLng, destination.latitude, destination.longitude);
-      lastSpokenStepRef.current = '';
-      setNavState('NAVIGATING');
-    }
+  const handleRecenter = () => {
+    webViewRef.current?.injectJavaScript(
+      `if (window.centerOnUser) { window.centerOnUser(${location.lat}, ${location.lon}); } true;`
+    );
   };
-
-  const handleSearchSubmit = async (queryToSearch) => {
-    const query = queryToSearch || searchQuery;
-    if (!query.trim()) return;
-    Keyboard.dismiss();
-    try {
-      speakMessage("Calculando ruta...");
-      const searchText = query.toLowerCase().includes('uruguay') ? query : `${query}, Uruguay`;
-      const geocoded = await Location.geocodeAsync(searchText);
-      
-      if (geocoded && geocoded.length > 0) {
-        const { latitude, longitude } = geocoded[0];
-        const dest = {
-          name: query,
-          latitude,
-          longitude,
-        };
-        setDestination(dest);
-        await fetchRealStreetRoute(location.latitude, location.longitude, latitude, longitude);
-        setNavState('PREVIEW');
-        speakMessage(`Ruta lista hacia ${query}`);
-      } else {
-        speakMessage("No se encontró la dirección ingresada.");
-      }
-    } catch (error) {
-      speakMessage("Error al buscar la dirección.");
-    }
-  };
-
-  const handleStartNavigation = () => {
-    lastSpokenStepRef.current = '';
-    setNavState('NAVIGATING');
-    speakMessage(`Iniciando recorrido hacia ${destination.name}. ${nextInstruction.text}`);
-  };
-
-  const handleVoiceDictation = () => {
-    speakMessage("Toque el micrófono en su teclado para dictar la dirección.");
-    if (inputRef.current) {
-      inputRef.current.focus();
-    }
-  };
-
-  const handleSaveFavorite = async () => {
-    if (!newFavName.trim()) return;
-    const newFav = { id: Date.now().toString(), name: newFavName, lat: location.latitude, lng: location.longitude };
-    const updated = [...favorites, newFav];
-    setFavorites(updated);
-    try { await AsyncStorage.setItem('@user_favorites', JSON.stringify(updated)); } catch (e) {}
-    setNewFavName('');
-    setModalVisible(false);
-  };
-
-  const distToDest = destination ? getDistanceFromLatLonInMeters(location.latitude, location.longitude, destination.latitude, destination.longitude) : 99999;
-  const isApproaching = distToDest < 60;
-  const activePitch = (navState === 'NAVIGATING' && is3DMode && !isApproaching) ? 60 : 0;
-  const activeZoom = (navState === 'NAVIGATING' && is3DMode && !isApproaching) ? 17 : (isApproaching ? 16 : 14);
-  const activeAltitude = (navState === 'NAVIGATING' && is3DMode && !isApproaching) ? 1000 : 2500;
 
   return (
-    <View style={[styles.container, { backgroundColor: isDarkMode ? '#000000' : '#F6F6F6' }]}>
-      <StatusBar barStyle={isDarkMode ? 'light-content' : 'dark-content'} backgroundColor={isDarkMode ? '#000000' : '#FFFFFF'} />
-      
-      <MapView
-        ref={mapRef}
-        style={styles.map}
-        initialRegion={location}
-        userInterfaceStyle={isDarkMode ? 'dark' : 'light'}
-        showsUserLocation={permissionGranted && (currentSpeed > 0 || navState === 'NAVIGATING')}
-        showsMyLocationButton={false}
-        showsCompass={true}
-        pitchEnabled={true}
-        rotateEnabled={true}
-        camera={navState === 'NAVIGATING' ? {
-          center: { latitude: location.latitude, longitude: location.longitude },
-          pitch: activePitch,
-          heading: userHeading,
-          altitude: activeAltitude,
-          zoom: activeZoom,
-        } : undefined}
-      >
-        {routeCoordinates.length > 0 && (
-          <Polyline 
-            coordinates={routeCoordinates} 
-            strokeWidth={6} 
-            strokeColor={isDarkMode ? '#276EF1' : '#000000'} 
-            lineCap="round"
-            lineJoin="round"
-          />
-        )}
+    <SafeAreaView style={styles.container}>
+      <StatusBar barStyle="dark-content" backgroundColor="#ffffff" />
 
-        {currentSpeed === 0 && navState !== 'NAVIGATING' && (
-          <Marker coordinate={{ latitude: location.latitude, longitude: location.longitude }} title="Mi Vehículo" anchor={{ x: 0.5, y: 0.5 }} rotation={userHeading}>
-            <View style={styles.carBadge}>
-              <Text style={{ fontSize: 24 }}>🚗</Text>
-            </View>
-          </Marker>
-        )}
-
-        {destination && (
-          <Marker coordinate={{ latitude: destination.latitude, longitude: destination.longitude }} title={destination.name} pinColor="#276EF1" />
-        )}
-
-        {radaresData.features.map((radar) => {
-          const [lng, lat] = radar.geometry.coordinates;
-          return (
-            <Marker key={radar.properties.id} coordinate={{ latitude: lat, longitude: lng }} title={`⚠️ ${radar.properties.nombre}`}>
-              <View style={styles.radarBadge}>
-                <Text style={{ fontSize: 18 }}>🚨</Text>
-              </View>
-            </Marker>
-          );
-        })}
-      </MapView>
-
-      {navState === 'IDLE' && (
-        <View style={[styles.searchCard, { backgroundColor: isDarkMode ? '#000000' : '#FFFFFF', borderColor: isDarkMode ? '#222222' : '#E2E2E2' }]}>
-          <TextInput
-            ref={inputRef}
-            style={[styles.input, { color: isDarkMode ? '#FFFFFF' : '#111111' }]}
-            placeholder="¿A dónde vamos? (Ej. Av. Italia 2500)"
-            placeholderTextColor={isDarkMode ? '#888888' : '#666666'}
-            value={searchQuery}
-            onChangeText={setSearchQuery}
-            onSubmitEditing={() => handleSearchSubmit()}
-          />
-          <TouchableOpacity style={styles.micButton} onPress={handleVoiceDictation}>
-            <Text style={{ fontSize: 18 }}>🎤</Text>
-          </TouchableOpacity>
-          <TouchableOpacity style={[styles.controlButton, { backgroundColor: isDarkMode ? '#222222' : '#F0F0F0' }]} onPress={() => setModalVisible(true)}>
-            <Text style={{ color: isDarkMode ? '#FFFFFF' : '#111111', fontWeight: 'bold' }}>⭐</Text>
-          </TouchableOpacity>
-        </View>
-      )}
-
-      {navState === 'PREVIEW' && destination && (
-        <View style={[styles.previewCard, { backgroundColor: isDarkMode ? '#111111' : '#FFFFFF' }]}>
-          <Text style={[styles.previewTitle, { color: isDarkMode ? '#FFFFFF' : '#111111' }]}>Destino: {destination.name}</Text>
-          <Text style={{ color: '#276EF1', fontWeight: 'bold', fontSize: 15, marginBottom: 4 }}>
-            🚗 {routeSummary.distanceKm} km • ⏱️ {routeSummary.durationMin} min aprox.
-          </Text>
-          <Text style={{ color: '#888888', fontSize: 12, marginBottom: 14 }}>
-            Ruta trazada por calles y avenidas • Vista panorámica automática
-          </Text>
-          <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' }}>
-            <TouchableOpacity style={styles.cancelPreviewBtn} onPress={() => { setNavState('IDLE'); setDestination(null); setRouteCoordinates([]); setRouteSteps([]); }}>
-              <Text style={{ color: '#FF3B30', fontWeight: 'bold' }}>Cancelar</Text>
-            </TouchableOpacity>
-            <TouchableOpacity 
-              style={styles.recenterBtn} 
-              onPress={() => mapRef.current?.fitToCoordinates(routeCoordinates, { edgePadding: { top: 230, right: 65, bottom: 180, left: 65 }, animated: true })}
-            >
-              <Text style={{ color: isDarkMode ? '#FFFFFF' : '#111111', fontWeight: 'bold', fontSize: 13 }}>🗺️ Encuadrar</Text>
-            </TouchableOpacity>
-            <TouchableOpacity style={styles.startNavBtn} onPress={handleStartNavigation}>
-              <Text style={{ color: '#FFFFFF', fontWeight: 'bold' }}>Iniciar Recorrido</Text>
-            </TouchableOpacity>
-          </View>
-        </View>
-      )}
-
-      {navState === 'REROUTING' && (
-        <View style={styles.reroutingBanner}>
-          <Text style={styles.reroutingText}>🔄 Desvío detectado: Recalculando por calles...</Text>
-        </View>
-      )}
-
-      {navState === 'NAVIGATING' && (
-        <>
-          <View style={styles.navTopCard}>
-            <View style={styles.navTopRow}>
-              <Text style={styles.navArrow}>{nextInstruction.arrow}</Text>
-              <View style={{ flex: 1 }}>
-                <Text style={styles.navDistText}>
-                  {isApproaching ? 'Llegando al destino' : (nextInstruction.distMeters > 0 ? `En ${nextInstruction.distMeters} m` : 'Siga la ruta')}
-                </Text>
-                <Text style={styles.navStreetTitle} numberOfLines={2}>
-                  {nextInstruction.text}
-                </Text>
-              </View>
-              <TouchableOpacity style={styles.toolsButton} onPress={() => setIs3DMode(!is3DMode)}>
-                <Text style={styles.toolsIcon}>{is3DMode ? '🧭' : '🗺️'}</Text>
-                <Text style={styles.toolsText}>{is3DMode ? '3D' : '2D'}</Text>
-              </TouchableOpacity>
-            </View>
-          </View>
-
-          <View style={styles.speedLimitBadge}>
-            <Text style={styles.speedLimitNum}>{activeAlert ? activeAlert.limit : 60}</Text>
-            <Text style={styles.speedLimitLabel}>LÍMITE</Text>
-          </View>
-
-          <View style={styles.currentStreetBadge}>
-            <Text style={styles.currentStreetBadgeText}>{currentStreet}</Text>
-          </View>
-        </>
-      )}
-
-      {activeAlert && (
-        <View style={[styles.alertBanner, { backgroundColor: activeAlert.isSpeeding ? '#D32F2F' : '#FF3B30' }]}>
-          <Text style={styles.alertText}>
-            {activeAlert.isSpeeding ? '🚨 ¡BAJE LA VELOCIDAD! ' : '🚨 '} 
-            {activeAlert.name} ({activeAlert.distance}m) - Máx: {activeAlert.limit} km/h
-          </Text>
-        </View>
-      )}
-
-      <View style={[styles.bottomStreetCard, { backgroundColor: isDarkMode ? '#000000' : '#FFFFFF', borderColor: isDarkMode ? '#222222' : '#E2E2E2' }]}>
-        <View style={styles.speedometerContainer}>
-          <Text style={[styles.speedText, { color: activeAlert && activeAlert.isSpeeding ? '#FF3B30' : (isDarkMode ? '#FFFFFF' : '#111111') }]}>
-            {currentSpeed}
-          </Text>
-          <Text style={{ color: '#888888', fontSize: 10, fontWeight: 'bold' }}>KM/H</Text>
-        </View>
-        <View style={{ flex: 1 }}>
-          <Text style={[styles.tripInfoTitle, { color: isDarkMode ? '#FFFFFF' : '#111111' }]} numberOfLines={1}>
-            {destination ? `${destination.name} (${routeSummary.distanceKm} km)` : 'Navegación libre'}
-          </Text>
-          <Text style={{ color: '#888888', fontSize: 13, fontWeight: '600' }} numberOfLines={1}>
-            Circulando por: {currentStreet}
-          </Text>
-        </View>
-        {(navState === 'NAVIGATING' || navState === 'PREVIEW') && (
-          <TouchableOpacity onPress={() => { setNavState('IDLE'); setDestination(null); setRouteCoordinates([]); setRouteSteps([]); }}>
-            <Text style={{ color: '#FF3B30', fontWeight: 'bold', marginLeft: 8 }}>Salir</Text>
-          </TouchableOpacity>
-        )}
+      <View style={styles.searchBar}>
+        <TextInput
+          style={styles.input}
+          placeholder="Buscar calle, esquina o ciudad en Uruguay..."
+          placeholderTextColor="#6b7280"
+          value={searchQuery}
+          onChangeText={setSearchQuery}
+          onSubmitEditing={handleSearchAndRoute}
+          returnKeyType="search"
+        />
+        <TouchableOpacity
+          style={styles.searchBtn}
+          onPress={handleSearchAndRoute}
+          disabled={loadingRoute}
+        >
+          {loadingRoute ? (
+            <ActivityIndicator color="#ffffff" size="small" />
+          ) : (
+            <Text style={styles.searchBtnText}>Ir</Text>
+          )}
+        </TouchableOpacity>
       </View>
 
-      <Modal animationType="slide" transparent={true} visible={modalVisible} onRequestClose={() => setModalVisible(false)}>
-        <SafeAreaView style={[styles.modalContainer, { backgroundColor: isDarkMode ? 'rgba(0,0,0,0.95)' : 'rgba(255,255,255,0.95)' }]}>
-          <View style={styles.modalContent}>
-            <Text style={[styles.modalTitle, { color: isDarkMode ? '#FFFFFF' : '#111111' }]}>Panel de Administración y Favoritos</Text>
-            <TextInput
-              style={[styles.modalInput, { backgroundColor: isDarkMode ? '#1A1A1A' : '#F0F0F0', color: isDarkMode ? '#FFFFFF' : '#111111', borderColor: isDarkMode ? '#333333' : '#CCCCCC' }]}
-              placeholder="Nombre del lugar favorito (ej. Casa)"
-              placeholderTextColor={isDarkMode ? '#888888' : '#666666'}
-              value={newFavName}
-              onChangeText={setNewFavName}
-            />
-            <TouchableOpacity style={styles.saveButton} onPress={handleSaveFavorite}>
-              <Text style={styles.saveButtonText}>Guardar Ubicación Actual</Text>
-            </TouchableOpacity>
-            <Text style={[styles.sectionTitle, { color: isDarkMode ? '#FFFFFF' : '#111111' }]}>Favoritos Guardados ({favorites.length})</Text>
-            <FlatList
-              data={favorites}
-              keyExtractor={(item) => item.id}
-              renderItem={({ item }) => (
-                <View style={[styles.favItem, { borderBottomColor: isDarkMode ? '#222222' : '#E2E2E2' }]}>
-                  <TouchableOpacity style={{ flex: 1 }} onPress={async () => { 
-                    setDestination({ name: item.name, latitude: item.lat, longitude: item.lng }); 
-                    setModalVisible(false);
-                    await fetchRealStreetRoute(location.latitude, location.longitude, item.lat, item.lng);
-                    setNavState('PREVIEW');
-                  }}>
-                    <Text style={[styles.favText, { color: isDarkMode ? '#FFFFFF' : '#111111' }]}>{item.name}</Text>
-                    <Text style={{ color: '#888888', fontSize: 12 }}>{item.lat.toFixed(4)}, {item.lng.toFixed(4)}</Text>
-                  </TouchableOpacity>
-                </View>
-              )}
-            />
-            <TouchableOpacity style={[styles.closeButton, { backgroundColor: isDarkMode ? '#333333' : '#DDDDDD' }]} onPress={() => setModalVisible(false)}>
-              <Text style={{ color: isDarkMode ? '#FFFFFF' : '#111111', fontWeight: 'bold' }}>Cerrar Panel</Text>
-            </TouchableOpacity>
+      {activeRadar && (
+        <View style={styles.radarBanner}>
+          <View style={styles.radarSign}>
+            <Text style={styles.radarSignText}>{activeRadar.limit}</Text>
           </View>
-        </SafeAreaView>
-      </Modal>
-    </View>
-  );
-}
+          <View style={{ flex: 1 }}>
+            <Text style={styles.radarTitle}>RADAR PRÓXIMO ({activeRadar.zone})</Text>
+            <Text style={styles.radarSub}>{activeRadar.name}</Text>
+          </View>
+        </View>
+      )}
 
-export default function App() {
-  return (
-    <ErrorBoundary>
-      <MainNavigatorApp />
-    </ErrorBoundary>
+      <WebView
+        ref={webViewRef}
+        originWhitelist={['*']}
+        source={{ html: LEAFLET_HTML }}
+        style={styles.map}
+        javaScriptEnabled={true}
+        domStorageEnabled={true}
+        onLoadEnd={() => setMapReady(true)}
+      />
+
+      <TouchableOpacity style={styles.recenterBtn} onPress={handleRecenter}>
+        <Text style={styles.recenterText}>📍 Centrar</Text>
+      </TouchableOpacity>
+
+      <View style={styles.speedBox}>
+        <Text style={styles.speedValue}>{speedKmh}</Text>
+        <Text style={styles.speedUnit}>km/h</Text>
+      </View>
+
+      {routeInfo && (
+        <View style={styles.routePanel}>
+          <View style={{ flex: 1 }}>
+            <Text style={styles.routeDest} numberOfLines={1}>
+              {routeInfo.destName}
+            </Text>
+            <Text style={styles.routeStats}>
+              {routeInfo.durationMin} min • {routeInfo.distanceKm} km
+            </Text>
+          </View>
+          <TouchableOpacity style={styles.clearBtn} onPress={handleClearRoute}>
+            <Text style={styles.clearBtnText}>Finalizar</Text>
+          </TouchableOpacity>
+        </View>
+      )}
+    </SafeAreaView>
   );
 }
 
 const styles = StyleSheet.create({
-  container: { flex: 1 },
-  map: { flex: 1 },
-  carBadge: { backgroundColor: '#FFFFFF', borderRadius: 20, padding: 4, elevation: 5 },
-  radarBadge: { backgroundColor: '#FFF0F0', borderRadius: 15, padding: 3, borderWidth: 1, borderColor: '#FF3B30' },
-  searchCard: {
-    position: 'absolute', top: 55, left: 20, right: 20, borderRadius: 12, borderWidth: 1, paddingHorizontal: 16, paddingVertical: 12, flexDirection: 'row', alignItems: 'center', elevation: 6
+  container: {
+    flex: 1,
+    backgroundColor: '#ffffff',
+    paddingTop: Platform.OS === 'android' ? StatusBar.currentHeight : 0,
   },
-  input: { flex: 1, fontSize: 16, fontWeight: '600' },
-  micButton: { padding: 8, marginRight: 5 },
-  controlButton: { marginLeft: 8, paddingVertical: 8, paddingHorizontal: 10, borderRadius: 8 },
-  previewCard: {
-    position: 'absolute', top: 50, left: 16, right: 16, borderRadius: 14, padding: 16, elevation: 8, shadowColor: '#000', shadowOffset: { width: 0, height: 4 }, shadowOpacity: 0.3, shadowRadius: 8
+  searchBar: {
+    flexDirection: 'row',
+    padding: 10,
+    backgroundColor: '#ffffff',
+    borderBottomWidth: 1,
+    borderBottomColor: '#e5e7eb',
+    zIndex: 10,
   },
-  previewTitle: { fontSize: 18, fontWeight: 'bold', marginBottom: 4 },
-  startNavBtn: { backgroundColor: '#276EF1', paddingVertical: 10, paddingHorizontal: 16, borderRadius: 8 },
-  cancelPreviewBtn: { paddingVertical: 10, paddingHorizontal: 10, justifyContent: 'center' },
-  recenterBtn: { backgroundColor: 'rgba(150,150,150,0.2)', paddingVertical: 10, paddingHorizontal: 12, borderRadius: 8 },
-  reroutingBanner: {
-    position: 'absolute', top: 140, alignSelf: 'center', backgroundColor: '#FF9500', paddingVertical: 8, paddingHorizontal: 16, borderRadius: 20, elevation: 6
+  input: {
+    flex: 1,
+    height: 44,
+    backgroundColor: '#f3f4f6',
+    borderRadius: 10,
+    paddingHorizontal: 14,
+    fontSize: 15,
+    color: '#111827',
   },
-  reroutingText: { color: '#FFFFFF', fontWeight: 'bold', fontSize: 14 },
-  navTopCard: {
-    position: 'absolute', top: 45, left: 16, right: 16, backgroundColor: '#000000', borderRadius: 14, padding: 16, elevation: 8
+  searchBtn: {
+    marginLeft: 8,
+    backgroundColor: '#2563eb',
+    borderRadius: 10,
+    paddingHorizontal: 18,
+    justifyContent: 'center',
+    alignItems: 'center',
   },
-  navTopRow: { flexDirection: 'row', alignItems: 'center' },
-  navArrow: { color: '#FFFFFF', fontSize: 36, fontWeight: 'bold', marginRight: 15 },
-  navDistText: { color: '#AAAAAA', fontSize: 14, fontWeight: '600' },
-  navStreetTitle: { color: '#FFFFFF', fontSize: 19, fontWeight: 'bold' },
-  toolsButton: { backgroundColor: '#222222', borderRadius: 24, paddingVertical: 6, paddingHorizontal: 10, alignItems: 'center', justifyContent: 'center', marginLeft: 10 },
-  toolsIcon: { fontSize: 16 },
-  toolsText: { color: '#AAAAAA', fontSize: 10, fontWeight: 'bold', marginTop: 2 },
-  speedLimitBadge: {
-    position: 'absolute', top: 185, left: 20, backgroundColor: '#FFFFFF', borderRadius: 10, paddingVertical: 8, paddingHorizontal: 12, alignItems: 'center', elevation: 6
+  searchBtnText: {
+    color: '#ffffff',
+    fontWeight: 'bold',
+    fontSize: 15,
   },
-  speedLimitNum: { fontSize: 22, fontWeight: 'bold', color: '#111111' },
-  speedLimitLabel: { fontSize: 9, fontWeight: 'bold', color: '#666666' },
-  currentStreetBadge: {
-    position: 'absolute', bottom: 120, alignSelf: 'center', backgroundColor: '#111111', paddingVertical: 6, paddingHorizontal: 16, borderRadius: 8, elevation: 4
+  radarBanner: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: '#fef2f2',
+    borderBottomWidth: 2,
+    borderBottomColor: '#dc2626',
+    padding: 10,
   },
-  currentStreetBadgeText: { color: '#FFFFFF', fontWeight: 'bold', fontSize: 14 },
-  alertBanner: {
-    position: 'absolute', top: 145, left: 16, right: 16, padding: 12, borderRadius: 8, alignItems: 'center', elevation: 5
+  radarSign: {
+    width: 44,
+    height: 44,
+    borderRadius: 22,
+    backgroundColor: '#ffffff',
+    borderWidth: 4,
+    borderColor: '#dc2626',
+    justifyContent: 'center',
+    alignItems: 'center',
+    marginRight: 12,
   },
-  alertText: { color: '#FFFFFF', fontWeight: 'bold', fontSize: 14 },
-  bottomStreetCard: {
-    position: 'absolute', bottom: 30, left: 16, right: 16, borderRadius: 12, borderWidth: 1, paddingVertical: 14, paddingHorizontal: 18, flexDirection: 'row', alignItems: 'center', elevation: 6
+  radarSignText: {
+    fontWeight: '900',
+    fontSize: 16,
+    color: '#111827',
   },
-  speedometerContainer: {
-    alignItems: 'center', justifyContent: 'center', marginRight: 15, paddingRight: 15, borderRightWidth: 1, borderRightColor: '#444'
+  radarTitle: {
+    fontWeight: 'bold',
+    fontSize: 13,
+    color: '#dc2626',
   },
-  speedText: { fontSize: 24, fontWeight: 'bold' },
-  tripInfoTitle: { fontSize: 16, fontWeight: 'bold' },
-  modalContainer: { flex: 1, justifyContent: 'flex-end' },
-  modalContent: { height: '70%', borderTopLeftRadius: 20, borderTopRightRadius: 20, padding: 20, elevation: 10 },
-  modalTitle: { fontSize: 18, fontWeight: 'bold', marginBottom: 15, textAlign: 'center' },
-  modalInput: { borderWidth: 1, borderRadius: 8, padding: 12, fontSize: 16, marginBottom: 10 },
-  saveButton: { backgroundColor: '#276EF1', padding: 14, borderRadius: 8, alignItems: 'center', marginBottom: 20 },
-  saveButtonText: { color: '#FFFFFF', fontWeight: 'bold', fontSize: 16 },
-  sectionTitle: { fontSize: 16, fontWeight: 'bold', marginBottom: 10 },
-  favItem: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', paddingVertical: 12, borderBottomWidth: 1 },
-  favText: { fontSize: 16, fontWeight: '600' },
-  closeButton: { marginTop: 15, padding: 14, borderRadius: 8, alignItems: 'center' },
-  errorContainer: { flex: 1, backgroundColor: '#000000', justifyContent: 'center', alignItems: 'center' },
-  errorTitle: { color: '#FF3B30', fontSize: 20, fontWeight: 'bold', marginBottom: 15, textAlign: 'center' },
-  errorMessage: { color: '#FFFFFF', fontSize: 14, marginBottom: 25, textAlign: 'center', paddingHorizontal: 20 },
-  errorButton: { backgroundColor: '#276EF1', paddingVertical: 12, paddingHorizontal: 30, borderRadius: 8 },
-  errorButtonText: { color: '#FFFFFF', fontWeight: 'bold', fontSize: 16 }
+  radarSub: {
+    fontSize: 13,
+    color: '#374151',
+  },
+  map: {
+    flex: 1,
+  },
+  recenterBtn: {
+    position: 'absolute',
+    right: 16,
+    bottom: 120,
+    backgroundColor: '#ffffff',
+    paddingVertical: 10,
+    paddingHorizontal: 14,
+    borderRadius: 24,
+    elevation: 4,
+    shadowColor: '#000',
+    shadowOpacity: 0.2,
+    shadowRadius: 4,
+  },
+  recenterText: {
+    fontWeight: 'bold',
+    color: '#1f2937',
+    fontSize: 13,
+  },
+  speedBox: {
+    position: 'absolute',
+    left: 16,
+    bottom: 115,
+    width: 68,
+    height: 68,
+    borderRadius: 34,
+    backgroundColor: '#111827',
+    justifyContent: 'center',
+    alignItems: 'center',
+    borderWidth: 2,
+    borderColor: '#ffffff',
+    elevation: 5,
+  },
+  speedValue: {
+    color: '#ffffff',
+    fontSize: 22,
+    fontWeight: 'bold',
+  },
+  speedUnit: {
+    color: '#9ca3af',
+    fontSize: 11,
+  },
+  routePanel: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: '#ffffff',
+    padding: 16,
+    borderTopWidth: 1,
+    borderTopColor: '#e5e7eb',
+  },
+  routeDest: {
+    fontSize: 15,
+    fontWeight: 'bold',
+    color: '#111827',
+  },
+  routeStats: {
+    fontSize: 14,
+    color: '#2563eb',
+    fontWeight: '600',
+    marginTop: 2,
+  },
+  clearBtn: {
+    backgroundColor: '#ef4444',
+    paddingVertical: 10,
+    paddingHorizontal: 16,
+    borderRadius: 10,
+    marginLeft: 12,
+  },
+  clearBtnText: {
+    color: '#ffffff',
+    fontWeight: 'bold',
+    fontSize: 14,
+  },
 });
+EOF
