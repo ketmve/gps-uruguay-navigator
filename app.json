@@ -1,0 +1,22 @@
+{
+  "expo": {
+    "name": "Navegador GPS Uruguay",
+    "slug": "gps-uruguay-navigator",
+    "version": "1.0.0",
+    "orientation": "portrait",
+    "scheme": "gpsuruguay",
+    "userInterfaceStyle": "automatic",
+    "plugins": [
+      "expo-router",
+      [
+        "expo-location",
+        {
+          "locationAlwaysAndWhenInUsePermission": "Permitir acceso a ubicación para navegación GPS."
+        }
+      ]
+    ],
+    "experiments": {
+      "typedRoutes": true
+    }
+  }
+}
