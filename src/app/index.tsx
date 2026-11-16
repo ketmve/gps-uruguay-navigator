@@ -57,6 +57,63 @@ function computeIsNight(lat: number, lon: number): boolean {
   }
 }
 
+interface NavStep {
+  distance: number;
+  name: string;
+  maneuver: { type: string; modifier?: string; location: [number, number] };
+}
+
+interface NavState {
+  steps: NavStep[];
+  idx: number;
+  said: number;
+  destLat: number;
+  destLon: number;
+}
+
+function fmtDist(m: number): string {
+  if (m >= 1000) return `${(m / 1000).toFixed(1)} km`;
+  return `${Math.max(10, Math.round(m / 10) * 10)} m`;
+}
+
+// Convierte una maniobra de OSRM en una instrucción en español
+function stepInstruction(step: NavStep): { arrow: string; text: string } {
+  const { type, modifier } = step.maneuver;
+  const street = step.name ? ` por ${step.name}` : '';
+  const dirs: Record<string, string> = {
+    left: 'a la izquierda',
+    right: 'a la derecha',
+    'slight left': 'ligeramente a la izquierda',
+    'slight right': 'ligeramente a la derecha',
+    'sharp left': 'cerrado a la izquierda',
+    'sharp right': 'cerrado a la derecha',
+    straight: 'recto',
+    uturn: 'en U',
+  };
+  const arrows: Record<string, string> = {
+    left: '←',
+    right: '→',
+    'slight left': '↖',
+    'slight right': '↗',
+    'sharp left': '↰',
+    'sharp right': '↱',
+    straight: '↑',
+    uturn: '↶',
+  };
+  const arrow = (modifier && arrows[modifier]) || '↑';
+  const dir = modifier ? dirs[modifier] : undefined;
+
+  if (type === 'arrive') return { arrow: '⚑', text: 'Llegas a tu destino' };
+  if (type === 'depart') return { arrow: '↑', text: `Sigue recto${street}` };
+  if (type === 'roundabout' || type === 'rotary') {
+    return { arrow: '↻', text: `Entra a la rotonda y toma la salida${street}` };
+  }
+  if (type === 'merge') return { arrow, text: `Incorpórate${street}` };
+  if (type === 'fork') return { arrow, text: `Mantente ${dir || 'en el carril'}${street}` };
+  if (!modifier || modifier === 'straight') return { arrow: '↑', text: `Sigue recto${street}` };
+  return { arrow, text: `Gira ${dir}${street}` };
+}
+
 const LEAFLET_HTML = `
 <!DOCTYPE html>
 <html>
@@ -168,7 +225,12 @@ const LEAFLET_HTML = `
       map.setView([lat, lon], 16);
     };
 
-    window.drawRoute = function(coords, destLat, destLon, destLabel) {
+    window.startNav = function(lat, lon) {
+      followUser = true;
+      map.setView([lat, lon], 17);
+    };
+
+    window.drawRoute = function(coords, destLat, destLon, destLabel, fit) {
       followUser = false;
       if (routeLine) map.removeLayer(routeLine);
       if (destMarker) map.removeLayer(destMarker);
@@ -188,10 +250,9 @@ const LEAFLET_HTML = `
 
       destMarker = L.marker([destLat, destLon])
         .addTo(map)
-        .bindPopup('<b>Destino:</b><br>' + destLabel)
-        .openPopup();
+        .bindPopup('<b>Destino:</b><br>' + destLabel);
 
-      map.fitBounds(line.getBounds(), { padding: [55, 55] });
+      if (fit) map.fitBounds(line.getBounds(), { padding: [55, 55] });
     };
 
     window.clearRoute = function(lat, lon) {
@@ -225,6 +286,60 @@ export default function GpsUruguayScreen() {
     computeIsNight(-34.9011, -56.1645)
   );
   const lastAlertedId = useRef<string | null>(null);
+  const navRef = useRef<NavState | null>(null);
+  const [navInstruction, setNavInstruction] = useState<{
+    arrow: string;
+    text: string;
+    distM: number;
+  } | null>(null);
+
+  const finishNavigation = () => {
+    navRef.current = null;
+    setNavInstruction(null);
+    setRouteInfo(null);
+    setSearchQuery('');
+    webViewRef.current?.injectJavaScript(
+      `if (window.clearRoute) { window.clearRoute(); } true;`
+    );
+  };
+
+  // Se llama con cada posición nueva: avanza los pasos y da avisos por voz
+  const updateNavigation = (lat: number, lon: number) => {
+    const nav = navRef.current;
+    if (!nav) return;
+
+    if (getDistanceMeters(lat, lon, nav.destLat, nav.destLon) < 40) {
+      Speech.speak('Llegaste a tu destino.', { language: 'es-UY' });
+      finishNavigation();
+      return;
+    }
+
+    // Pasa al siguiente paso cuando ya se cruzó la maniobra actual
+    while (nav.idx + 1 < nav.steps.length - 1) {
+      const [mLon, mLat] = nav.steps[nav.idx + 1].maneuver.location;
+      if (getDistanceMeters(lat, lon, mLat, mLon) < 25) {
+        nav.idx += 1;
+        nav.said = 0;
+      } else {
+        break;
+      }
+    }
+
+    const next = nav.steps[nav.idx + 1];
+    if (!next) return;
+    const [nLon, nLat] = next.maneuver.location;
+    const dist = getDistanceMeters(lat, lon, nLat, nLon);
+    const { arrow, text } = stepInstruction(next);
+    setNavInstruction({ arrow, text, distM: dist });
+
+    if (dist < 80 && nav.said < 2) {
+      nav.said = 2;
+      Speech.speak(`Ahora, ${text.toLowerCase()}`, { language: 'es-UY' });
+    } else if (dist < 350 && nav.said < 1) {
+      nav.said = 1;
+      Speech.speak(`En ${fmtDist(dist)}, ${text.toLowerCase()}`, { language: 'es-UY' });
+    }
+  };
 
   useEffect(() => {
     let subscriber: Location.LocationSubscription | null = null;
@@ -267,6 +382,7 @@ export default function GpsUruguayScreen() {
           );
 
           checkNearbyRadars(lat, lon);
+          updateNavigation(lat, lon);
         }
       );
     })();
@@ -353,7 +469,7 @@ export default function GpsUruguayScreen() {
       const destLon = parseFloat(geoData[0].lon);
       const destLabel = geoData[0].display_name.split(',').slice(0, 2).join(', ');
 
-      const osrmUrl = `https://router.project-osrm.org/route/v1/driving/${location.lon},${location.lat};${destLon},${destLat}?overview=full&geometries=geojson`;
+      const osrmUrl = `https://router.project-osrm.org/route/v1/driving/${location.lon},${location.lat};${destLon},${destLat}?overview=full&geometries=geojson&steps=true`;
       const routeRes = await fetch(osrmUrl);
       const routeData = await routeRes.json();
 
@@ -370,10 +486,20 @@ export default function GpsUruguayScreen() {
 
       setRouteInfo({ distanceKm, durationMin, destName: destLabel });
 
+      const steps: NavStep[] = bestRoute.legs?.[0]?.steps ?? [];
+      if (steps.length > 1) {
+        navRef.current = { steps, idx: 0, said: 0, destLat, destLon };
+        const first = stepInstruction(steps[1]);
+        setNavInstruction({ arrow: first.arrow, text: first.text, distM: steps[0].distance });
+      } else {
+        navRef.current = null;
+        setNavInstruction(null);
+      }
+
       const coordsJson = JSON.stringify(latLngCoords);
       const safeLabel = JSON.stringify(destLabel);
       webViewRef.current?.injectJavaScript(
-        `if (window.drawRoute) { window.drawRoute(${coordsJson}, ${destLat}, ${destLon}, ${safeLabel}); } true;`
+        `if (window.drawRoute) { window.drawRoute(${coordsJson}, ${destLat}, ${destLon}, ${safeLabel}, ${!navRef.current}); } if (window.startNav && ${!!navRef.current}) { window.startNav(${location.lat}, ${location.lon}); } true;`
       );
 
       Speech.speak(
@@ -388,6 +514,8 @@ export default function GpsUruguayScreen() {
   };
 
   const handleClearRoute = () => {
+    navRef.current = null;
+    setNavInstruction(null);
     setRouteInfo(null);
     setSearchQuery('');
     webViewRef.current?.injectJavaScript(
@@ -428,6 +556,18 @@ export default function GpsUruguayScreen() {
           )}
         </TouchableOpacity>
       </View>
+
+      {navInstruction && (
+        <View style={styles.navBanner}>
+          <Text style={styles.navArrow}>{navInstruction.arrow}</Text>
+          <View style={{ flex: 1 }}>
+            <Text style={styles.navDist}>{fmtDist(navInstruction.distM)}</Text>
+            <Text style={styles.navText} numberOfLines={2}>
+              {navInstruction.text}
+            </Text>
+          </View>
+        </View>
+      )}
 
       {activeRadar && (
         <View style={styles.radarBanner}>
@@ -518,6 +658,32 @@ const styles = StyleSheet.create({
     color: '#ffffff',
     fontWeight: 'bold',
     fontSize: 15,
+  },
+  navBanner: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: '#000000',
+    borderBottomWidth: 1,
+    borderBottomColor: '#404040',
+    paddingVertical: 12,
+    paddingHorizontal: 16,
+  },
+  navArrow: {
+    color: '#ffffff',
+    fontSize: 44,
+    width: 64,
+    textAlign: 'center',
+    marginRight: 8,
+  },
+  navDist: {
+    color: '#ffffff',
+    fontSize: 22,
+    fontWeight: 'bold',
+  },
+  navText: {
+    color: '#d4d4d4',
+    fontSize: 15,
+    marginTop: 2,
   },
   radarBanner: {
     flexDirection: 'row',
