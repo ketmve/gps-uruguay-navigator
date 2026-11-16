@@ -16,6 +16,10 @@ import * as Location from 'expo-location';
 import * as Speech from 'expo-speech';
 import RADARES_JSON from '../data/radares.json';
 
+// suncalc no trae tipos; se importa con require para evitar errores de TypeScript
+// eslint-disable-next-line @typescript-eslint/no-var-requires
+const SunCalc = require('suncalc');
+
 interface Radar {
   id: string;
   name: string;
@@ -41,6 +45,18 @@ function getDistanceMeters(lat1: number, lon1: number, lat2: number, lon2: numbe
   return R * c;
 }
 
+// Es de noche si la hora actual está antes del amanecer o después del atardecer
+function computeIsNight(lat: number, lon: number): boolean {
+  try {
+    const now = new Date();
+    const times = SunCalc.getTimes(now, lat, lon);
+    return now < times.sunrise || now > times.sunset;
+  } catch {
+    const h = new Date().getHours();
+    return h < 7 || h >= 20;
+  }
+}
+
 const LEAFLET_HTML = `
 <!DOCTYPE html>
 <html>
@@ -50,6 +66,26 @@ const LEAFLET_HTML = `
   <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
   <style>
     html, body, #map { margin: 0; padding: 0; width: 100%; height: 100%; background: #e5e7eb; }
+    body.night, body.night #map { background: #000000; }
+
+    /* Modo noche: se invierten los colores del mapa claro para obtener un mapa oscuro */
+    body.night .leaflet-tile-pane {
+      filter: invert(1) hue-rotate(180deg) brightness(0.8) contrast(0.95) saturate(0.6);
+    }
+
+    .leaflet-popup-content-wrapper, .leaflet-popup-tip {
+      background: #000000;
+      color: #ffffff;
+      border: 1px solid #333333;
+    }
+    .leaflet-popup-close-button { color: #ffffff !important; }
+    .leaflet-container a.leaflet-popup-close-button:hover { color: #cccccc !important; }
+    .leaflet-control-attribution {
+      background: rgba(0,0,0,0.7) !important;
+      color: #cccccc !important;
+    }
+    .leaflet-control-attribution a { color: #ffffff !important; }
+
     .radar-badge {
       background: #dc2626;
       color: white;
@@ -79,10 +115,9 @@ const LEAFLET_HTML = `
   <div id="map"></div>
   <script>
     const map = L.map('map', { zoomControl: false }).setView([-34.9011, -56.1645], 13);
-    L.tileLayer('https://{s}.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}{r}.png', {
-      subdomains: 'abcd',
+    L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', {
       maxZoom: 19,
-      attribution: '© OpenStreetMap © CARTO'
+      attribution: '© OpenStreetMap'
     }).addTo(map);
 
     let userMarker = null;
@@ -91,6 +126,10 @@ const LEAFLET_HTML = `
     let followUser = true;
 
     map.on('dragstart', () => { followUser = false; });
+
+    window.setNight = function(isNight) {
+      document.body.classList.toggle('night', !!isNight);
+    };
 
     window.initRadars = function(radars) {
       radars.forEach(r => {
@@ -134,18 +173,25 @@ const LEAFLET_HTML = `
       if (routeLine) map.removeLayer(routeLine);
       if (destMarker) map.removeLayer(destMarker);
 
-      routeLine = L.polyline(coords, {
-        color: '#2563eb',
+      // Ruta negra con borde blanco: se ve igual de bien en el mapa claro y en el oscuro
+      const casing = L.polyline(coords, {
+        color: '#ffffff',
+        weight: 10,
+        opacity: 0.95
+      });
+      const line = L.polyline(coords, {
+        color: '#000000',
         weight: 6,
-        opacity: 0.85
-      }).addTo(map);
+        opacity: 1
+      });
+      routeLine = L.layerGroup([casing, line]).addTo(map);
 
       destMarker = L.marker([destLat, destLon])
         .addTo(map)
         .bindPopup('<b>Destino:</b><br>' + destLabel)
         .openPopup();
 
-      map.fitBounds(routeLine.getBounds(), { padding: [55, 55] });
+      map.fitBounds(line.getBounds(), { padding: [55, 55] });
     };
 
     window.clearRoute = function(lat, lon) {
@@ -175,6 +221,9 @@ export default function GpsUruguayScreen() {
   } | null>(null);
   const [activeRadar, setActiveRadar] = useState<Radar | null>(null);
   const [mapReady, setMapReady] = useState<boolean>(false);
+  const [isNight, setIsNight] = useState<boolean>(() =>
+    computeIsNight(-34.9011, -56.1645)
+  );
   const lastAlertedId = useRef<string | null>(null);
 
   useEffect(() => {
@@ -226,6 +275,25 @@ export default function GpsUruguayScreen() {
       if (subscriber) subscriber.remove();
     };
   }, []);
+
+  // Cada minuto se revisa si ya amaneció o anocheció en la ubicación actual
+  const roundedLat = Math.round(location.lat);
+  const roundedLon = Math.round(location.lon);
+  useEffect(() => {
+    const update = () => setIsNight(computeIsNight(location.lat, location.lon));
+    update();
+    const id = setInterval(update, 60000);
+    return () => clearInterval(id);
+  }, [roundedLat, roundedLon]);
+
+  // Se avisa al mapa cada vez que cambia entre día y noche
+  useEffect(() => {
+    if (mapReady) {
+      webViewRef.current?.injectJavaScript(
+        `if (window.setNight) { window.setNight(${isNight}); } true;`
+      );
+    }
+  }, [isNight, mapReady]);
 
   useEffect(() => {
     if (mapReady) {
@@ -335,17 +403,18 @@ export default function GpsUruguayScreen() {
 
   return (
     <SafeAreaView style={styles.container}>
-      <StatusBar barStyle="dark-content" backgroundColor="#ffffff" />
+      <StatusBar barStyle="light-content" backgroundColor="#000000" />
 
       <View style={styles.searchBar}>
         <TextInput
           style={styles.input}
           placeholder="Buscar calle, esquina o ciudad en Uruguay..."
-          placeholderTextColor="#6b7280"
+          placeholderTextColor="#9ca3af"
           value={searchQuery}
           onChangeText={setSearchQuery}
           onSubmitEditing={handleSearchAndRoute}
           returnKeyType="search"
+          selectionColor="#ffffff"
         />
         <TouchableOpacity
           style={styles.searchBtn}
@@ -375,7 +444,7 @@ export default function GpsUruguayScreen() {
       <WebView
         ref={webViewRef}
         originWhitelist={['*']}
-        source={{ html: LEAFLET_HTML }}
+        source={{ html: LEAFLET_HTML, baseUrl: 'https://gps-uruguay-navigator.app' }}
         style={styles.map}
         javaScriptEnabled={true}
         domStorageEnabled={true}
@@ -413,29 +482,33 @@ export default function GpsUruguayScreen() {
 const styles = StyleSheet.create({
   container: {
     flex: 1,
-    backgroundColor: '#ffffff',
+    backgroundColor: '#000000',
     paddingTop: Platform.OS === 'android' ? StatusBar.currentHeight : 0,
   },
   searchBar: {
     flexDirection: 'row',
     padding: 10,
-    backgroundColor: '#ffffff',
+    backgroundColor: '#000000',
     borderBottomWidth: 1,
-    borderBottomColor: '#e5e7eb',
+    borderBottomColor: '#262626',
     zIndex: 10,
   },
   input: {
     flex: 1,
     height: 44,
-    backgroundColor: '#f3f4f6',
+    backgroundColor: '#000000',
+    borderWidth: 1,
+    borderColor: '#404040',
     borderRadius: 10,
     paddingHorizontal: 14,
     fontSize: 15,
-    color: '#111827',
+    color: '#ffffff',
   },
   searchBtn: {
     marginLeft: 8,
-    backgroundColor: '#2563eb',
+    backgroundColor: '#000000',
+    borderWidth: 1,
+    borderColor: '#404040',
     borderRadius: 10,
     paddingHorizontal: 18,
     justifyContent: 'center',
@@ -449,7 +522,7 @@ const styles = StyleSheet.create({
   radarBanner: {
     flexDirection: 'row',
     alignItems: 'center',
-    backgroundColor: '#fef2f2',
+    backgroundColor: '#000000',
     borderBottomWidth: 2,
     borderBottomColor: '#dc2626',
     padding: 10,
@@ -468,36 +541,36 @@ const styles = StyleSheet.create({
   radarSignText: {
     fontWeight: '900',
     fontSize: 16,
-    color: '#111827',
+    color: '#000000',
   },
   radarTitle: {
     fontWeight: 'bold',
     fontSize: 13,
-    color: '#dc2626',
+    color: '#ffffff',
   },
   radarSub: {
     fontSize: 13,
-    color: '#374151',
+    color: '#d4d4d4',
   },
   map: {
     flex: 1,
+    backgroundColor: '#000000',
   },
   recenterBtn: {
     position: 'absolute',
     right: 16,
     bottom: 120,
-    backgroundColor: '#ffffff',
+    backgroundColor: '#000000',
+    borderWidth: 1,
+    borderColor: '#404040',
     paddingVertical: 10,
     paddingHorizontal: 14,
     borderRadius: 24,
     elevation: 4,
-    shadowColor: '#000',
-    shadowOpacity: 0.2,
-    shadowRadius: 4,
   },
   recenterText: {
     fontWeight: 'bold',
-    color: '#1f2937',
+    color: '#ffffff',
     fontSize: 13,
   },
   speedBox: {
@@ -507,7 +580,7 @@ const styles = StyleSheet.create({
     width: 68,
     height: 68,
     borderRadius: 34,
-    backgroundColor: '#111827',
+    backgroundColor: '#000000',
     justifyContent: 'center',
     alignItems: 'center',
     borderWidth: 2,
@@ -520,30 +593,32 @@ const styles = StyleSheet.create({
     fontWeight: 'bold',
   },
   speedUnit: {
-    color: '#9ca3af',
+    color: '#d4d4d4',
     fontSize: 11,
   },
   routePanel: {
     flexDirection: 'row',
     alignItems: 'center',
-    backgroundColor: '#ffffff',
+    backgroundColor: '#000000',
     padding: 16,
     borderTopWidth: 1,
-    borderTopColor: '#e5e7eb',
+    borderTopColor: '#262626',
   },
   routeDest: {
     fontSize: 15,
     fontWeight: 'bold',
-    color: '#111827',
+    color: '#ffffff',
   },
   routeStats: {
     fontSize: 14,
-    color: '#2563eb',
+    color: '#ffffff',
     fontWeight: '600',
     marginTop: 2,
   },
   clearBtn: {
-    backgroundColor: '#ef4444',
+    backgroundColor: '#000000',
+    borderWidth: 1,
+    borderColor: '#404040',
     paddingVertical: 10,
     paddingHorizontal: 16,
     borderRadius: 10,

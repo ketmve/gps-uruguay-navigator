@@ -7,7 +7,11 @@
     "scheme": "gpsuruguay",
     "userInterfaceStyle": "automatic",
     "android": {
-      "package": "uy.gps.navigator"
+      "package": "uy.gps.navigator",
+      "permissions": [
+        "android.permission.ACCESS_COARSE_LOCATION",
+        "android.permission.ACCESS_FINE_LOCATION"
+      ]
     },
     "plugins": [
       "expo-router",
@@ -16,10 +20,19 @@
         {
           "locationAlwaysAndWhenInUsePermission": "Permitir acceso a ubicación para navegación GPS."
         }
-      ]
+      ],
+      "expo-asset"
     ],
     "experiments": {
       "typedRoutes": true
+    },
+    "extra": {
+      "router": {
+        "origin": false
+      },
+      "eas": {
+        "projectId": "3c4ee0f0-c51d-404c-99b8-90ad8885915f"
+      }
     }
   }
 }
