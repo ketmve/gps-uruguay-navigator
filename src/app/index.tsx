@@ -309,7 +309,8 @@ const LEAFLET_HTML = `
       if (moving) {
         pitch = Math.min(60, pitch + 10);
         if (heading >= 0) bearing = heading;
-      } else if (speed < 2) {
+      } else if (speed < 2 && !routeCoords) {
+        // sin ruta activa y detenido: vuelve al 2D; con ruta activa se queda en 3D
         pitch = Math.max(0, pitch - 10);
         if (pitch === 0) bearing = 0;
       }
@@ -346,10 +347,41 @@ const LEAFLET_HTML = `
       followUser = true;
       map.easeTo({ center: [lon, lat], zoom: 16, duration: 600 });
     };
+    // Rumbo de la ruta unos metros por delante de tu posición
+    function routeBearing(lat, lon) {
+      if (!routeCoords || routeCoords.length < 2) return bearing;
+      let i0 = 0, best = Infinity;
+      for (let i = 0; i < routeCoords.length; i++) {
+        const d = dist([lon, lat], [routeCoords[i][1], routeCoords[i][0]]);
+        if (d < best) { best = d; i0 = i; }
+      }
+      let j = i0, acc = 0;
+      while (j < routeCoords.length - 1 && acc < 40) {
+        acc += dist([routeCoords[j][1], routeCoords[j][0]], [routeCoords[j + 1][1], routeCoords[j + 1][0]]);
+        j++;
+      }
+      if (j === i0) return bearing;
+      const dx = (routeCoords[j][1] - routeCoords[i0][1]) * Math.cos(lat * Math.PI / 180);
+      const dy = routeCoords[j][0] - routeCoords[i0][0];
+      return (Math.atan2(dx, dy) * 180 / Math.PI + 360) % 360;
+    }
+
+    // Al iniciar la ruta se entra directo al modo 3D, mirando hacia donde va la ruta
     window.startNav = function(lat, lon) {
       overviewOn = false;
       followUser = true;
-      map.easeTo({ center: [lon, lat], zoom: 17, pitch: pitch, bearing: bearing, duration: 800 });
+      if (routeCoords && routeCoords.length > 1) {
+        pitch = 60;
+        bearing = routeBearing(lat, lon);
+      }
+      map.easeTo({
+        center: [lon, lat],
+        zoom: pitch > 0 ? 17 : 16,
+        pitch: pitch,
+        bearing: bearing,
+        padding: { top: pitch > 0 ? 260 : 0, bottom: 0, left: 0, right: 0 },
+        duration: 1500
+      });
     };
 
     function fitRoute() {
